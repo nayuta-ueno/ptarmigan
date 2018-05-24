@@ -34,6 +34,7 @@
 #include <arpa/inet.h>
 #include <assert.h>
 
+#include "jsonrpc-c.h"
 #include "cJSON.h"
 
 #include "ucoind.h"
@@ -66,10 +67,11 @@ void p2p_cli_init(void)
 }
 
 
-void p2p_cli_start(const daemon_connect_t *pConn, jrpc_context *ctx)
+void p2p_cli_start(const daemon_connect_t *pConn, void *pCtx)
 {
     int ret;
     struct sockaddr_in sv_addr;
+    jrpc_context *ctx = (jrpc_context *)pCtx;
 
     if (!ucoin_keys_chkpub(pConn->node_id)) {
         DBG_PRINTF("invalid node_id\n");
@@ -203,10 +205,12 @@ lnapp_conf_t *p2p_cli_search_short_channel_id(uint64_t short_channel_id)
 }
 
 
-void p2p_cli_show_self(cJSON *pResult)
+void p2p_cli_show_self(void *pResult)
 {
+    cJSON *p_result = (cJSON *)pResult;
+
     for (int lp = 0; lp < SZ_SOCK_CLIENT_MAX; lp++) {
-        lnapp_show_self(&mAppConf[lp], pResult, "client");
+        lnapp_show_self(&mAppConf[lp], p_result, "client");
     }
 }
 

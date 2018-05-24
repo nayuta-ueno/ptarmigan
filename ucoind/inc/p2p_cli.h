@@ -27,8 +27,6 @@
 
 #include <stdint.h>
 
-#include "jsonrpc-c.h"
-
 #include "lnapp.h"
 
 
@@ -45,7 +43,7 @@ void p2p_cli_init(void);
 /** [p2p_cli]開始
  *
  */
-void p2p_cli_start(const daemon_connect_t *pConn, jrpc_context *ctx);
+void p2p_cli_start(const daemon_connect_t *pConn, void *pCtx);
 
 
 /** [p2p_cli]全停止
@@ -69,7 +67,7 @@ lnapp_conf_t *p2p_cli_search_short_channel_id(uint64_t short_channel_id);
 /** [p2p_cli]動作中lnapp全出力
  *
  */
-void p2p_cli_show_self(cJSON *pResult);
+void p2p_cli_show_self(void *pResult);
 
 
 /** [p2p_cli]ループ状態取得
