@@ -139,7 +139,13 @@ static inline int tid() {
     }\
 }
 
-#else   //UCOIN_USE_ZLOG
+#elif defined(ANDROID)
+#include <android/log.h>
+#define DBG_PRINTF(...)     ((void)__android_log_print(ANDROID_LOG_DEBUG, "ucoin::", __VA_ARGS__))
+#define DBG_PRINTF2(...)    ((void)__android_log_print(ANDROID_LOG_DEBUG, "ucoin::", __VA_ARGS__))
+#define DUMPBIN(...)        //none
+#define DUMPTXID(...)       //none
+#else
 
 /// @def    DBG_PRINTF(format, ...)
 /// @brief  デバッグ出力(UCOIN_DEBUG定義時のみ有効)
@@ -153,8 +159,9 @@ static inline int tid() {
 
 #else //UCOIN_DEBUG
 #define DBG_PRINTF(...)     //none
-#define DBG_PRINTF2(...)     //none
-#define DUMPBIN(...)
+#define DBG_PRINTF2(...)    //none
+#define DUMPBIN(...)        //none
+#define DUMPTXID(...)       //none
 #endif //UCOIN_DEBUG
 
 
