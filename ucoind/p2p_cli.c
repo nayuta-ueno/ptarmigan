@@ -67,9 +67,11 @@ void p2p_cli_init(void)
 }
 
 
-void p2p_cli_start(const daemon_connect_t *pConn, void *pCtx)
+bool p2p_cli_start(const daemon_connect_t *pConn, jrpc_context *ctx)
 {
+    bool bret = false;
     int ret;
+    int idx;
     struct sockaddr_in sv_addr;
     jrpc_context *ctx = (jrpc_context *)pCtx;
 
@@ -77,10 +79,9 @@ void p2p_cli_start(const daemon_connect_t *pConn, void *pCtx)
         DBG_PRINTF("invalid node_id\n");
         ctx->error_code = RPCERR_NODEID;
         ctx->error_message = ucoind_error_str(RPCERR_NODEID);
-        return;
+        goto LABEL_EXIT;
     }
 
-    int idx;
     for (idx = 0; idx < (int)ARRAY_SIZE(mAppConf); idx++) {
         if (mAppConf[idx].sock == -1) {
             break;
@@ -90,7 +91,7 @@ void p2p_cli_start(const daemon_connect_t *pConn, void *pCtx)
         DBG_PRINTF("client full\n");
         ctx->error_code = RPCERR_FULLCLI;
         ctx->error_message = ucoind_error_str(RPCERR_FULLCLI);
-        return;
+        goto LABEL_EXIT;
     }
 
     fprintf(PRINTOUT, "connect: %s:%d\n", pConn->ipaddr, pConn->port);
@@ -157,9 +158,10 @@ void p2p_cli_start(const daemon_connect_t *pConn, void *pCtx)
     mAppConf[idx].conn_port = pConn->port;
 
     lnapp_start(&mAppConf[idx]);
+    bret = true;
 
 LABEL_EXIT:
-    ;
+    return bret;
 }
 
 
