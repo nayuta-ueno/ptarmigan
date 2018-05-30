@@ -30,12 +30,12 @@
 #include <sys/syscall.h>
 #include <sys/types.h>
 
-#ifdef UCOIN_USE_ZLOG
-#else   //UCOIN_USE_ZLOG
+#ifdef UCOIN_USE_ULOG
+#else   //UCOIN_USE_ULOG
 static inline int tid() {
     return (int)syscall(SYS_gettid);
 }
-#endif  //UCOIN_USE_ZLOG
+#endif  //UCOIN_USE_ULOG
 
 #include <stdio.h>
 #include <inttypes.h>
@@ -107,36 +107,21 @@ static inline int tid() {
 #define DEBUGOUT        stderr
 
 #ifdef UCOIN_DEBUG
-#ifdef UCOIN_USE_ZLOG
-#define DBG_PRINTF(...) {\
-    if (mZlogCatUcoin != NULL) {\
-        zlog(mZlogCatUcoin, __FILE__, sizeof(__FILE__)-1, __func__, sizeof(__func__)-1, __LINE__, \
-        ZLOG_LEVEL_DEBUG, __VA_ARGS__); \
-    }\
-}
-#define DBG_PRINTF2(...) {\
-    if (mZlogCatSimple != NULL) {\
-        zlog(mZlogCatSimple, __FILE__, sizeof(__FILE__)-1, __func__, sizeof(__func__)-1, __LINE__, \
-        ZLOG_LEVEL_DEBUG, __VA_ARGS__); \
-    }\
-}
+#ifdef UCOIN_USE_ULOG
+#include "ulog.h"
+#define DBG_PRINTF(...) ulog_write(ULOG_PRI_DBG, __FILE__, __LINE__, "LIB", __VA_ARGS__)
+#define DBG_PRINTF2(...) ulog_write(ULOG_PRI_DBG, __FILE__, __LINE__, "LIB", __VA_ARGS__)
 #define DUMPBIN(dt,ln) {\
-    if (mZlogCatSimple != NULL) {\
-        char *p_str = (char *)malloc(ln * 2 + 1);   \
-        ucoin_util_bin2str(p_str, dt, ln);          \
-        zlog(mZlogCatSimple, __FILE__, sizeof(__FILE__)-1, __func__, sizeof(__func__)-1, __LINE__, \
-        ZLOG_LEVEL_DEBUG, "%s\n", p_str); \
-        free(p_str); \
-    }\
+    char *p_str = (char *)malloc(ln * 2 + 1);   \
+    ucoin_util_bin2str(p_str, dt, ln);          \
+    ulog_write(ULOG_PRI_DBG, __FILE__, __LINE__, "LIB", "%s\n", p_str);  \
+    free(p_str); \
 }
 #define DUMPTXID(dt) {\
-    if (mZlogCatSimple != NULL) {\
-        char *p_str = (char *)malloc(UCOIN_SZ_TXID * 2 + 1);   \
-        ucoin_util_bin2str_rev(p_str, dt, UCOIN_SZ_TXID);      \
-        zlog(mZlogCatSimple, __FILE__, sizeof(__FILE__)-1, __func__, sizeof(__func__)-1, __LINE__, \
-        ZLOG_LEVEL_DEBUG, "%s\n", p_str); \
-        free(p_str); \
-    }\
+    char *p_str = (char *)malloc(UCOIN_SZ_TXID * 2 + 1);   \
+    ucoin_util_bin2str_rev(p_str, dt, UCOIN_SZ_TXID);      \
+    ulog_write(ULOG_PRI_DBG, __FILE__, __LINE__, "LIB", "%s\n", p_str);  \
+    free(p_str);                \
 }
 
 #elif defined(ANDROID)
@@ -144,7 +129,18 @@ static inline int tid() {
 #define DBG_PRINTF(...)     ((void)__android_log_print(ANDROID_LOG_DEBUG, "ucoin::", __VA_ARGS__))
 #define DBG_PRINTF2(...)    ((void)__android_log_print(ANDROID_LOG_DEBUG, "ucoin::", __VA_ARGS__))
 #define DUMPBIN(...)        //none
-#define DUMPTXID(...)       //none
+#define DUMPBIN(dt,ln) {\
+    char *p_str = (char *)malloc(ln * 2 + 1);   \
+    ucoin_util_bin2str(p_str, dt, ln);          \
+    __android_log_print(ANDROID_LOG_DEBUG, "ucoin::", "%s", p_str)  \
+    free(p_str); \
+}
+#define DUMPTXID(dt) {\
+    char *p_str = (char *)malloc(UCOIN_SZ_TXID * 2 + 1);   \
+    ucoin_util_bin2str_rev(p_str, dt, UCOIN_SZ_TXID);      \
+    __android_log_print(ANDROID_LOG_DEBUG, "ucoin::", "%s", p_str)  \
+    free(p_str);                \
+}
 #else
 
 /// @def    DBG_PRINTF(format, ...)
@@ -155,7 +151,7 @@ static inline int tid() {
 /// @brief  ダンプ出力(UCOIN_DEBUG定義時のみ有効)
 #define DUMPBIN(dt,ln)      ucoin_util_dumpbin(DEBUGOUT, dt, ln, true)
 #define DUMPTXID(dt)        {ucoin_util_dumptxid(DEBUGOUT, dt); fprintf(DEBUGOUT, "\n");}
-#endif  //UCOIN_USE_ZLOG
+#endif  //UCOIN_USE_ULOG
 
 #else //UCOIN_DEBUG
 #define DBG_PRINTF(...)     //none
@@ -187,9 +183,6 @@ extern bool     mNativeSegwit;
 #ifdef UCOIN_USE_RNG
 extern mbedtls_ctr_drbg_context mRng;
 #endif  //UCOIN_USE_RNG
-#ifdef UCOIN_USE_ZLOG
-extern zlog_category_t *mZlogCatUcoin;
-#endif  //UCOIN_USE_ZLOG
 
 
 /**************************************************************************

@@ -36,12 +36,6 @@
 #include <stdint.h>
 #include <stdbool.h>
 
-#ifdef UCOIN_USE_ZLOG
-#include "zlog.h"
-extern zlog_category_t *mZlogCatApp;
-extern zlog_category_t *mZlogCatSimple;
-#endif  //UCOIN_USE_ZLOG
-
 #ifdef __cplusplus
 extern "C" {
 #endif //__cplusplus
@@ -1336,7 +1330,7 @@ void ucoin_util_bin2str(char *pStr, const uint8_t *pBin, uint32_t BinLen);
 void ucoin_util_bin2str_rev(char *pStr, const uint8_t *pBin, uint32_t BinLen);
 
 
-/** log出力開始(zlog)
+/** log出力開始(ulog)
  *
  */
 bool ucoin_util_log_init(void);

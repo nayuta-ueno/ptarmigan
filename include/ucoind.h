@@ -75,6 +75,7 @@ static inline int tid() {
 #define RPCERR_NOCHANN              (-10003)
 #define RPCERR_PARSE                (-10004)
 #define RPCERR_NOINIT               (-10005)
+#define RPCERR_BLOCKCHAIN           (-10006)
 
 #define RPCERR_NODEID               (-20000)
 #define RPCERR_NOOPEN               (-20001)
@@ -89,6 +90,7 @@ static inline int tid() {
 
 #define RPCERR_INVOICE_FULL         (-22000)
 #define RPCERR_INVOICE_ERASE        (-22001)
+#define RPCERR_INVOICE_FAIL         (-22002)
 
 #define RPCERR_CLOSE_START          (-25000)
 #define RPCERR_CLOSE_FAIL           (-25001)
@@ -114,39 +116,24 @@ static inline int tid() {
 #define DEBUGOUT        stderr
 #define DEBUGTRACE
 
-#ifdef UCOIN_USE_ZLOG
-#define DBG_PRINTF(...) {\
-    if (mZlogCatApp != NULL) {\
-        zlog(mZlogCatApp, __FILE__, sizeof(__FILE__)-1, __func__, sizeof(__func__)-1, __LINE__, \
-        ZLOG_LEVEL_DEBUG, __VA_ARGS__); \
-    }\
-}
-#define DBG_PRINTF2(...) {\
-    if (mZlogCatSimple != NULL) {\
-        zlog(mZlogCatSimple, __FILE__, sizeof(__FILE__)-1, __func__, sizeof(__func__)-1, __LINE__, \
-        ZLOG_LEVEL_DEBUG, __VA_ARGS__); \
-    }\
-}
+#ifdef UCOIN_USE_ULOG
+#include "ulog.h"
+#define DBG_PRINTF(...) ulog_write(ULOG_PRI_DBG, __FILE__, __LINE__, "APP", __VA_ARGS__)
+#define DBG_PRINTF2(...) ulog_write(ULOG_PRI_DBG, __FILE__, __LINE__, "APP", __VA_ARGS__)
 #define DUMPBIN(dt,ln) {\
-    if (mZlogCatSimple != NULL) {\
-        char *p_str = (char *)malloc(ln * 2 + 1);   \
-        ucoin_util_bin2str(p_str, dt, ln);          \
-        zlog(mZlogCatSimple, __FILE__, sizeof(__FILE__)-1, __func__, sizeof(__func__)-1, __LINE__, \
-        ZLOG_LEVEL_DEBUG, "%s\n", p_str);   \
-        free(p_str); \
-    }\
+    char *p_str = (char *)malloc(ln * 2 + 1);   \
+    ucoin_util_bin2str(p_str, dt, ln);          \
+    ulog_write(ULOG_PRI_DBG, __FILE__, __LINE__, "APP", "%s\n", p_str);  \
+    free(p_str); \
 }
 #define DUMPTXID(dt) {\
-    if (mZlogCatSimple != NULL) {\
-        char *p_str = (char *)malloc(UCOIN_SZ_TXID * 2 + 1);   \
-        ucoin_util_bin2str_rev(p_str, dt, UCOIN_SZ_TXID);      \
-        zlog(mZlogCatSimple, __FILE__, sizeof(__FILE__)-1, __func__, sizeof(__func__)-1, __LINE__, \
-        ZLOG_LEVEL_DEBUG, "%s\n", p_str);   \
-        free(p_str);                \
-    }\
+    char *p_str = (char *)malloc(UCOIN_SZ_TXID * 2 + 1);   \
+    ucoin_util_bin2str_rev(p_str, dt, UCOIN_SZ_TXID);      \
+    ulog_write(ULOG_PRI_DBG, __FILE__, __LINE__, "APP", "%s\n", p_str);  \
+    free(p_str);                \
 }
 
-#else   //UCOIN_USE_ZLOG
+#else   //UCOIN_USE_ULOG
 
 /// @def    DBG_PRINTF(format, ...)
 /// @brief  デバッグ出力(UCOIN_DEBUG定義時のみ有効)
@@ -158,7 +145,7 @@ static inline int tid() {
 #define DUMPBIN(dt,ln)      ucoin_util_dumpbin(DEBUGOUT, dt, ln, true)
 #define DUMPTXID(dt)        {ucoin_util_dumptxid(DEBUGOUT, dt); fprintf(DEBUGOUT, "\n");}
 
-#endif  //UCOIN_USE_ZLOG
+#endif  //UCOIN_USE_ULOG
 
 #ifdef DEBUGTRACE
 #define DBGTRACE_BEGIN      {fprintf(stderr, "[%d]%s[%s:%d]BEGIN\n", tid(), __func__, __FILE__, __LINE__);}
