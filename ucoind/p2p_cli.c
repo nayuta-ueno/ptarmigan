@@ -73,7 +73,6 @@ bool p2p_cli_start(const daemon_connect_t *pConn, jrpc_context *ctx)
     int ret;
     int idx;
     struct sockaddr_in sv_addr;
-    jrpc_context *ctx = (jrpc_context *)pCtx;
 
     if (!ucoin_keys_chkpub(pConn->node_id)) {
         DBG_PRINTF("invalid node_id\n");
