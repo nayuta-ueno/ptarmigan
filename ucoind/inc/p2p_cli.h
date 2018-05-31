@@ -27,6 +27,8 @@
 
 #include <stdint.h>
 
+#include "jsonrpc-c.h"
+
 #include "lnapp.h"
 
 #ifdef __cplusplus
@@ -71,7 +73,7 @@ lnapp_conf_t *p2p_cli_search_short_channel_id(uint64_t short_channel_id);
 /** [p2p_cli]動作中lnapp全出力
  *
  */
-void p2p_cli_show_self(void *pResult);
+void p2p_cli_show_self(cJSON *pResult);
 
 
 /** [p2p_cli]ループ状態取得
