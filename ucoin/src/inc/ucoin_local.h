@@ -127,7 +127,6 @@ static inline int tid() {
 #include <android/log.h>
 #define DBG_PRINTF(...)     ((void)__android_log_print(ANDROID_LOG_DEBUG, "ucoin::", __VA_ARGS__))
 #define DBG_PRINTF2(...)    ((void)__android_log_print(ANDROID_LOG_DEBUG, "ucoin::", __VA_ARGS__))
-#define DUMPBIN(...)        //none
 #define DUMPBIN(dt,ln) {\
     char *p_str = (char *)malloc(ln * 2 + 1);   \
     ucoin_util_bin2str(p_str, dt, ln);          \
