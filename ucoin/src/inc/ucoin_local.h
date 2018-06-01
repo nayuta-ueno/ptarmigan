@@ -130,17 +130,16 @@ static inline int tid() {
 #define DUMPBIN(dt,ln) {\
     char *p_str = (char *)malloc(ln * 2 + 1);   \
     ucoin_util_bin2str(p_str, dt, ln);          \
-    __android_log_print(ANDROID_LOG_DEBUG, "ucoin::", "%s", p_str)  \
+    __android_log_print(ANDROID_LOG_DEBUG, "ucoin::", "%s", p_str);  \
     free(p_str); \
 }
 #define DUMPTXID(dt) {\
     char *p_str = (char *)malloc(UCOIN_SZ_TXID * 2 + 1);   \
     ucoin_util_bin2str_rev(p_str, dt, UCOIN_SZ_TXID);      \
-    __android_log_print(ANDROID_LOG_DEBUG, "ucoin::", "%s", p_str)  \
-    free(p_str);                \
+    __android_log_print(ANDROID_LOG_DEBUG, "ucoin::", "%s", p_str);  \
+    free(p_str); \
 }
 #else
-
 #define DEBUGOUT        stderr
 
 /// @def    DBG_PRINTF(format, ...)
