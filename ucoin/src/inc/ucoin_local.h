@@ -120,15 +120,20 @@ static inline int tid() {
 
 #elif defined(ANDROID)
 #include <android/log.h>
-#define DBG_PRINTF(...)     ((void)__android_log_print(ANDROID_LOG_DEBUG, "ucoin::", __VA_ARGS__))
-#define DBG_PRINTF2(...)    ((void)__android_log_print(ANDROID_LOG_DEBUG, "ucoin::", __VA_ARGS__))
-#define DUMPBIN(dt,ln) {\
+
+#define LOGV            LOGD
+#define DUMPV           DUMPD
+#define TXIDV           TXIDD
+
+#define LOGD(...)     ((void)__android_log_print(ANDROID_LOG_DEBUG, "ucoin::", __VA_ARGS__))
+#define LOGD2(...)    ((void)__android_log_print(ANDROID_LOG_DEBUG, "ucoin::", __VA_ARGS__))
+#define DUMPD(dt,ln) {\
     char *p_str = (char *)malloc(ln * 2 + 1);   \
     ucoin_util_bin2str(p_str, dt, ln);          \
     __android_log_print(ANDROID_LOG_DEBUG, "ucoin::", "%s", p_str);  \
     free(p_str); \
 }
-#define DUMPTXID(dt) {\
+#define TXIDD(dt) {\
     char *p_str = (char *)malloc(UCOIN_SZ_TXID * 2 + 1);   \
     ucoin_util_bin2str_rev(p_str, dt, UCOIN_SZ_TXID);      \
     __android_log_print(ANDROID_LOG_DEBUG, "ucoin::", "%s", p_str);  \
