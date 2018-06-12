@@ -902,7 +902,7 @@ void ln_lmdb_bkself_show(MDB_txn *txn, MDB_dbi dbi)
                 fprintf(PRINTOUT, ",\n");
             }
             if (DBCOPY_IDX[lp].disp) {
-                fprintf(PRINTOUT, "\"%s\": ", DBCOPY_KEYS[lp].name);
+                fprintf(PRINTOUT, "      \"%s\": ", DBCOPY_KEYS[lp].name);
             }
             switch (DBCOPY_IDX[lp].type) {
             case ETYPE_BYTEPTR: //const uint8_t*
@@ -972,7 +972,7 @@ void ln_lmdb_bkself_show(MDB_txn *txn, MDB_dbi dbi)
 #ifdef M_DEBUG_KEYS
     if ( ((local.pubkeys[0][0] == 0x02) || (local.pubkeys[0][0] == 0x03)) &&
          ((remote.pubkeys[0][0] == 0x02) || (remote.pubkeys[0][0] == 0x03))) {
-        fprintf(PRINTOUT, ",\n");
+        fprintf(PRINTOUT, "\n");
         ln_misc_update_scriptkeys(&local, &remote);
         //ln_print_keys(&local, &remote);
     }
@@ -1169,6 +1169,7 @@ bool ln_db_annocnl_save(const ucoin_buf_t *pCnlAnno, uint64_t ShortChannelId, co
             retval = -1;
         }
     }
+    ucoin_buf_free(&buf_ann);
     //annoinfo channel
     if ((retval == 0) && (pSendId != NULL)) {
         bool ret = ln_db_annocnls_add_nodeid(&db_info, ShortChannelId, LN_DB_CNLANNO_ANNO, false, pSendId);
@@ -1958,7 +1959,7 @@ bool ln_db_annonod_save(const ucoin_buf_t *pNodeAnno, const ln_node_announce_t *
         }
     } else {
         //新規
-        LOGD("new node_announcement\n");
+        LOGV("new node_announcement\n");
         upddb = true;
     }
     ucoin_buf_free(&buf_node);
@@ -3313,8 +3314,8 @@ static int annonod_load(ln_lmdb_db_t *pDb, ucoin_buf_t *pNodeAnno, uint32_t *pTi
  */
 static int annonod_save(ln_lmdb_db_t *pDb, const ucoin_buf_t *pNodeAnno, const ln_node_announce_t *pAnno)
 {
-    LOGD("node_id=");
-    DUMPD(pAnno->p_node_id, UCOIN_SZ_PUBKEY);
+    LOGV("node_id=");
+    DUMPV(pAnno->p_node_id, UCOIN_SZ_PUBKEY);
 
     MDB_val key, data;
     uint8_t keydata[M_SZ_ANNOINFO_NODE];
