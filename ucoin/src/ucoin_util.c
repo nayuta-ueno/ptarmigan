@@ -425,6 +425,13 @@ int ucoin_dbg_malloc_cnt(void)
 #endif  //UCOIN_DEBUG_MEM
 
 
+void ucoin_util_strftime(char *pTmStr, uint32_t Tm)
+{
+    time_t tm = (time_t)Tm;
+    strftime(pTmStr, UCOIN_SZ_DTSTR + 1, "%m/%d %H:%M:%S", localtime(&tm));
+}
+
+
 /**************************************************************************
  * package functions
  **************************************************************************/
@@ -438,7 +445,7 @@ void ucoin_util_hash160(uint8_t *pHash160, const uint8_t *pData, uint16_t Len)
 }
 
 
-void HIDDEN ucoin_util_hash256(uint8_t *pHash256, const uint8_t *pData, uint16_t Len)
+void ucoin_util_hash256(uint8_t *pHash256, const uint8_t *pData, uint16_t Len)
 {
     ucoin_util_sha256(pHash256, pData, Len);
     ucoin_util_sha256(pHash256, pHash256, UCOIN_SZ_SHA256);

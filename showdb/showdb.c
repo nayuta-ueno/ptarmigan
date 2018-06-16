@@ -245,23 +245,23 @@ static void ln_print_self(const ln_self_t *self)
                 if (cnt > 0) {
                     printf(",\n");
                 }
-                printf("{\n");
-                printf(M_QQ("id") ": %" PRIu64 ",\n", self->cnl_add_htlc[lp].id);
-                printf(M_QQ("flag") ": " M_QQ("%s") ",\n", (LN_HTLC_FLAG_IS_RECV(self->cnl_add_htlc[lp].flag)) ? "Received" : "Offered");
-                printf(M_QQ("amount_msat") ": %" PRIu64 ",\n", self->cnl_add_htlc[lp].amount_msat);
-                printf(M_QQ("cltv_expiry") ": %" PRIu32 ",\n", self->cnl_add_htlc[lp].cltv_expiry);
-                printf(M_QQ("payhash") ": \"");
+                printf(INDENT4 "{\n");
+                printf(INDENT5 M_QQ("id") ": %" PRIu64 ",\n", self->cnl_add_htlc[lp].id);
+                printf(INDENT5 M_QQ("flag") ": " M_QQ("%s(%02x)") ",\n", ((LN_HTLC_FLAG_IS_RECV(self->cnl_add_htlc[lp].flag)) ? "Received" : "Offered"), self->cnl_add_htlc[lp].flag);
+                printf(INDENT5 M_QQ("amount_msat") ": %" PRIu64 ",\n", self->cnl_add_htlc[lp].amount_msat);
+                printf(INDENT5 M_QQ("cltv_expiry") ": %" PRIu32 ",\n", self->cnl_add_htlc[lp].cltv_expiry);
+                printf(INDENT5 M_QQ("payhash") ": \"");
                 ucoin_util_dumpbin(stdout, self->cnl_add_htlc[lp].payment_sha256, UCOIN_SZ_SHA256, false);
                 printf("\",\n");
-                printf(M_QQ("shared_secret") ": \"");
+                printf(INDENT5 M_QQ("shared_secret") ": \"");
                 ucoin_util_dumpbin(stdout, self->cnl_add_htlc[lp].shared_secret.buf, self->cnl_add_htlc[lp].shared_secret.len, false);
                 printf("\",\n");
-                printf(M_QQ("index") ": %d\n", lp);
-                printf("}");
+                printf(INDENT5 M_QQ("index") ": %d\n", lp);
+                printf(INDENT4 "}");
                 cnt++;
             }
         }
-        printf("],\n");
+        printf(INDENT3 "],\n");
     }
 
     printf(INDENT3 M_QQ("commit_local") ": {\n");
@@ -312,6 +312,19 @@ static void ln_print_self(const ln_self_t *self)
 }
 
 
+static void escape_json_string(char *pOut, const char *pIn)
+{
+    char *p = pOut;
+    while (*pIn) {
+        if (*pIn == '\"') {
+            *p++ = '\\';
+        }
+        *p++ = *pIn++;
+    }
+    *p = '\0';
+}
+
+
 static void ln_print_announce_short(const uint8_t *pData, uint16_t Len)
 {
     uint16_t type = ln_misc_get16be(pData);
@@ -347,7 +360,9 @@ static void ln_print_announce_short(const uint8_t *pData, uint16_t Len)
                 printf(INDENT3 M_QQ("node") ": \"");
                 ucoin_util_dumpbin(stdout, node_pub, UCOIN_SZ_PUBKEY, false);
                 printf("\",\n");
-                printf(INDENT3 M_QQ("alias") ": " M_QQ("%s") ",\n", node_alias);
+                char esc_alias[LN_SZ_ALIAS * 2];
+                escape_json_string(esc_alias, node_alias);
+                printf(INDENT3 M_QQ("alias") ": " M_QQ("%s") ",\n", esc_alias);
                 printf(INDENT3 M_QQ("rgbcolor") ": \"#%02x%02x%02x\",\n", msg.rgbcolor[0], msg.rgbcolor[1], msg.rgbcolor[2]);
                 if (msg.addr.type == LN_NODEDESC_IPV4) {
                     char addr[50];

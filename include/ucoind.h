@@ -99,6 +99,7 @@ static inline int tid() {
 #define RPCERR_NOROUTE              (-26001)
 #define RPCERR_PAYFAIL              (-26002)
 #define RPCERR_PAY_RETRY            (-26003)
+#define RPCERR_TOOMANYHOP           (-26004)
 
 
 #define PREIMAGE_NUM        (10)        ///< 保持できるpreimage数(server/clientそれぞれ)
@@ -117,18 +118,23 @@ static inline int tid() {
 
 #ifdef UCOIN_USE_ULOG
 #include "ulog.h"
-#define LOGV(...)       ulog_write(ULOG_PRI_VERBOSE, __FILE__, __LINE__, 1, "APP", __VA_ARGS__)
-#define DUMPV(dt,ln)    ulog_dump(ULOG_PRI_VERBOSE, __FILE__, __LINE__, 0, "APP", dt, ln)
-#define TXIDV(dt)       ulog_dump_rev(ULOG_PRI_VERBOSE, __FILE__, __LINE__, 0, "APP", dt, UCOIN_SZ_TXID)
+#define LOGV(...)       ulog_write(ULOG_PRI_VERBOSE, __FILE__, __LINE__, 1, "APP", __func__, __VA_ARGS__)
+#define DUMPV(dt,ln)    ulog_dump(ULOG_PRI_VERBOSE, __FILE__, __LINE__, 0, "APP", __func__, dt, ln)
+#define TXIDV(dt)       ulog_dump_rev(ULOG_PRI_VERBOSE, __FILE__, __LINE__, 0, "APP", __func__, dt, UCOIN_SZ_TXID)
 
-#define LOGD(...)       ulog_write(ULOG_PRI_DBG, __FILE__, __LINE__, 1, "APP", __VA_ARGS__)
-#define LOGD2(...)      ulog_write(ULOG_PRI_DBG, __FILE__, __LINE__, 0, "APP", __VA_ARGS__)
-#define DUMPD(dt,ln)    ulog_dump(ULOG_PRI_DBG, __FILE__, __LINE__, 0, "APP", dt, ln)
-#define TXIDD(dt)       ulog_dump_rev(ULOG_PRI_DBG, __FILE__, __LINE__, 0, "APP", dt, UCOIN_SZ_TXID)
+#define LOGD(...)       ulog_write(ULOG_PRI_DBG, __FILE__, __LINE__, 1, "APP", __func__, __VA_ARGS__)
+#define LOGD2(...)      ulog_write(ULOG_PRI_DBG, __FILE__, __LINE__, 0, "APP", __func__, __VA_ARGS__)
+#define DUMPD(dt,ln)    ulog_dump(ULOG_PRI_DBG, __FILE__, __LINE__, 0, "APP", __func__, dt, ln)
+#define TXIDD(dt)       ulog_dump_rev(ULOG_PRI_DBG, __FILE__, __LINE__, 0, "APP", __func__, dt, UCOIN_SZ_TXID)
 
 #else   //UCOIN_USE_ULOG
 #define DEBUGOUT        stderr
 
+/// @def    LOGV(format, ...)
+/// @brief  デバッグ出力(UCOIN_DEBUG定義時のみ有効)
+#define LOGV(format, ...) {fprintf(DEBUGOUT, "%lu[%d]%s[%s:%d]", (unsigned long)time(NULL), tid(), __func__, __FILE__, __LINE__); fprintf(DEBUGOUT, format, ##__VA_ARGS__);}
+#define DUMPV(dt,ln)        ucoin_util_dumpbin(DEBUGOUT, dt, ln, true)
+#define TXIDV(dt)           {ucoin_util_dumptxid(DEBUGOUT, dt); fprintf(DEBUGOUT, "\n");}
 /// @def    LOGD(format, ...)
 /// @brief  デバッグ出力(UCOIN_DEBUG定義時のみ有効)
 #define LOGD(format, ...) {fprintf(DEBUGOUT, "%lu[%d]%s[%s:%d]", (unsigned long)time(NULL), tid(), __func__, __FILE__, __LINE__); fprintf(DEBUGOUT, format, ##__VA_ARGS__);}
@@ -150,6 +156,9 @@ static inline int tid() {
 #endif
 
 #else //UCOIN_DEBUG
+#define LOGV(...)       //none
+#define DUMPV(...)      //none
+#define TXIDV(...)      //none
 
 #define LOGD(...)     //none
 #define LOGD2(...)    //none
