@@ -792,12 +792,14 @@ bool lnapp_get_committx(lnapp_conf_t *pAppConf, cJSON *pResult)
                 ucoin_buf_free(&buf);
 
                 char title[10];
-                if (lp == 0) {
+                if (lp == LN_CLOSE_IDX_COMMIT) {
                     strcpy(title, "committx");
-                } else if (lp == 1) {
+                } else if (lp == LN_CLOSE_IDX_TOLOCAL) {
                     strcpy(title, "to_local");
+                } else if (lp == LN_CLOSE_IDX_TOREMOTE) {
+                    strcpy(title, "to_remote???");
                 } else {
-                    sprintf(title, "htlc%d", lp - 1);
+                    sprintf(title, "htlc%d", lp - LN_CLOSE_IDX_HTLC);
                 }
                 cJSON_AddItemToObject(result_local, title, cJSON_CreateString(transaction));
                 APP_FREE(transaction);
@@ -1412,7 +1414,7 @@ static bool send_open_channel(lnapp_conf_t *p_conf, const funding_conf_t *pFundi
 
     bool unspent = true;
     if (ret) {
-        ret = btcrpc_getxout(&unspent, &fundin_sat, pFunding->txid, pFunding->txindex);
+        ret = btcrpc_check_unspent(&unspent, &fundin_sat, pFunding->txid, pFunding->txindex);
         LOGD("ret=%d, unspent=%d\n", ret, unspent);
     } else {
         LOGD("btcrpc_getnewaddress\n");
@@ -1454,7 +1456,7 @@ static bool send_open_channel(lnapp_conf_t *p_conf, const funding_conf_t *pFundi
         }
         ucoin_buf_free(&buf_bolt);
     } else {
-        LOGD("fail through: btcrpc_getxout");
+        LOGD("fail through: btcrpc_check_unspent");
         TXIDD(pFunding->txid);
     }
 
@@ -1620,7 +1622,7 @@ static void *thread_poll_start(void *pArg)
                 break;
             }
         }
-        if (!p_conf->loop || (p_conf->p_self == NULL)) {
+        if (p_conf->p_self == NULL) {
             break;
         }
 
@@ -1744,7 +1746,7 @@ static void poll_normal_operating(lnapp_conf_t *p_conf)
     //funding_tx使用チェック
     bool unspent;
     uint64_t sat;
-    bool ret = btcrpc_getxout(&unspent, &sat, ln_funding_txid(p_conf->p_self), ln_funding_txindex(p_conf->p_self));
+    bool ret = btcrpc_check_unspent(&unspent, &sat, ln_funding_txid(p_conf->p_self), ln_funding_txindex(p_conf->p_self));
     if (ret && !unspent) {
         //ループ解除
         LOGD("funding_tx is spent.\n");
@@ -1788,10 +1790,12 @@ static void *thread_anno_start(void *pArg)
     int slp = M_WAIT_ANNO_SEC;
 
     while (p_conf->loop) {
-        sleep(slp);
-
-        if (!p_conf->loop) {
-            break;
+        //ループ解除まで時間が長くなるので、短くチェックする
+        for (int lp = 0; lp < slp; lp++) {
+            sleep(1);
+            if (!p_conf->loop) {
+                break;
+            }
         }
 
         if ((p_conf->flag_recv & RECV_MSG_END) == 0) {
@@ -2313,6 +2317,16 @@ static void cb_anno_signsed(lnapp_conf_t *p_conf, void *p_param)
     ret = ln_db_annocnlupd_load(&buf_bolt, &timestamp, ln_short_channel_id(p_conf->p_self), p->sort);
     if (ret) {
         LOGD("send: my channel_update\n");
+        send_peer_noise(p_conf, &buf_bolt);
+    } else {
+        LOGD("err\n");
+    }
+    ucoin_buf_free(&buf_bolt);
+
+    //node_announcement
+    ret = ln_db_annonod_load(&buf_bolt, NULL, ln_node_getid());
+    if (ret) {
+        LOGD("send: my node_announcement\n");
         send_peer_noise(p_conf, &buf_bolt);
     } else {
         LOGD("err\n");
