@@ -49,6 +49,7 @@
 #include "misc.h"
 #include "ln_db.h"
 #include "ln_db_lmdb.h"
+#include "ulog.h"
 
 #include "ucoind.h"
 #include "p2p_svr.h"
@@ -56,6 +57,13 @@
 #include "lnapp.h"
 #include "monitoring.h"
 #include "cmd_json.h"
+
+
+/**************************************************************************
+ * macros
+ **************************************************************************/
+#define M_OPTSTRING     "p:n:a:c:d:xNh"
+
 
 /********************************************************************
  * typedefs
@@ -84,6 +92,13 @@ static struct nodefaillisthead_t    mNodeFailListHead;
 
 
 /********************************************************************
+ * prototypes
+ ********************************************************************/
+
+static void reset_getopt();
+
+
+/********************************************************************
  * entry point
  ********************************************************************/
 
@@ -91,10 +106,34 @@ int main(int argc, char *argv[])
 {
     bool bret;
     rpc_conf_t rpc_conf;
-    ln_nodeaddr_t *p_addr = ln_node_addr();
-    char *p_alias = ln_node_alias();
+    ln_nodeaddr_t *p_addr;
+    char *p_alias;
+    int opt;
 
-    ucoin_util_log_init();
+    //`d` option is used to change working directory.
+    // It is done at the beginning of this process.
+    while ((opt = getopt(argc, argv, M_OPTSTRING)) != -1) {
+        switch (opt) {
+        case 'd':
+            if (chdir(optarg) != 0) {
+                fprintf(stderr, "fail: change the working directory\n");
+                return -1;
+            }
+            break;
+        default:
+            break;
+        }
+    }
+    reset_getopt();
+
+    p_addr = ln_node_addr();
+    p_alias = ln_node_alias();
+
+#ifdef ENABLE_ULOG_TO_STDOUT
+    ulog_init_stdout();
+#else
+    ulog_init();
+#endif
 
     memset(&rpc_conf, 0, sizeof(rpc_conf_t));
 #ifndef NETKIND
@@ -116,14 +155,13 @@ int main(int argc, char *argv[])
     p_addr->type = LN_NODEDESC_NONE;
     p_addr->port = 9735;
 
-    int opt;
     int options = 0;
-    while ((opt = getopt(argc, argv, "p:n:a:c:d:xNh")) != -1) {
+    while ((opt = getopt(argc, argv, M_OPTSTRING)) != -1) {
         switch (opt) {
-        case 'd':
-            //db directory
-            ln_lmdb_set_path(optarg);
-            break;
+        //case 'd':
+        //    //`d` option is used to change working directory.
+        //    // It is done at the beginning of this process.
+        //    break;
         case 'p':
             //port num
             p_addr->port = (uint16_t)atoi(optarg);
@@ -203,7 +241,7 @@ int main(int argc, char *argv[])
     //bitcoind起動確認
     uint8_t genesis[LN_SZ_HASH];
     btcrpc_init(&rpc_conf);
-    bret = btcrpc_getblockhash(genesis, 0);
+    bret = btcrpc_getgenesisblock(genesis);
     if (!bret) {
         LOGD("fail: bitcoin getblockhash(check bitcoind)\n");
         return -1;
@@ -286,22 +324,22 @@ int main(int argc, char *argv[])
     lnapp_term();
     btcrpc_term();
     ln_db_term();
-    ucoin_util_log_term();
+    ulog_term();
 
     return 0;
 
 LABEL_EXIT:
-    fprintf(PRINTOUT, "[usage]\n");
-    fprintf(PRINTOUT, "\t%s [-p PORT NUM] [-n ALIAS NAME] [-c BITCOIN.CONF] [-a IPv4 ADDRESS] [-i]\n", argv[0]);
-    fprintf(PRINTOUT, "\n");
-    fprintf(PRINTOUT, "\t\t-h : help\n");
-    fprintf(PRINTOUT, "\t\t-p PORT : node port(default: 9735)\n");
-    fprintf(PRINTOUT, "\t\t-n NAME : alias name(default: \"node_xxxxxxxxxxxx\")\n");
-    fprintf(PRINTOUT, "\t\t-c CONF_FILE : using bitcoin.conf(default: ~/.bitcoin/bitcoin.conf)\n");
-    fprintf(PRINTOUT, "\t\t-a IPADDRv4 : announce IPv4 address(default: none)\n");
-    // fprintf(PRINTOUT, "\t\t-i : show node_id(not start node)\n");
-    fprintf(PRINTOUT, "\t\t-x : erase current DB(without node_id)(TEST)\n");
-    fprintf(PRINTOUT, "\t\t-N : erase node_announcement DB(TEST)\n");
+    fprintf(stderr, "[usage]\n");
+    fprintf(stderr, "\t%s [-p PORT NUM] [-n ALIAS NAME] [-c BITCOIN.CONF] [-a IPv4 ADDRESS] [-i]\n", argv[0]);
+    fprintf(stderr, "\n");
+    fprintf(stderr, "\t\t-h : help\n");
+    fprintf(stderr, "\t\t-p PORT : node port(default: 9735)\n");
+    fprintf(stderr, "\t\t-n NAME : alias name(default: \"node_xxxxxxxxxxxx\")\n");
+    fprintf(stderr, "\t\t-c CONF_FILE : using bitcoin.conf(default: ~/.bitcoin/bitcoin.conf)\n");
+    fprintf(stderr, "\t\t-a IPADDRv4 : announce IPv4 address(default: none)\n");
+    // fprintf(stderr, "\t\t-i : show node_id(not start node)\n");
+    fprintf(stderr, "\t\t-x : erase current DB(without node_id)(TEST)\n");
+    fprintf(stderr, "\t\t-N : erase node_announcement DB(TEST)\n");
     return -1;
 }
 
@@ -452,3 +490,18 @@ char *ucoind_error_str(int ErrCode)
 
     return strdup(p_str);
 }
+
+
+/********************************************************************
+ * private functions
+ ********************************************************************/
+
+static void reset_getopt()
+{
+    //optreset = 1;
+    //optind = 1;
+
+    //ref. http://man7.org/linux/man-pages/man3/getopt.3.html#NOTES
+    optind = 0;
+}
+

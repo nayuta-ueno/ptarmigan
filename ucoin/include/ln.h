@@ -96,6 +96,9 @@ extern "C" {
 #define LN_CLOSE_IDX_HTLC               (3)         ///< HTLC tx
 #define LN_CLOSE_IDX_NONE               ((uint8_t)0xff)
 
+// self.anno_flag
+#define LN_ANNO_FLAG_END                (0x80)      ///< 1:announcement_signatures交換済み
+
 // revoked transaction closeされたときの self->p_revoked_vout, p_revoked_witのインデックス値
 #define LN_RCLOSE_IDX_TOLOCAL           (0)         ///< to_local
 #define LN_RCLOSE_IDX_TOREMOTE          (1)         ///< to_remote
@@ -190,7 +193,6 @@ typedef enum {
     LN_CB_FUNDINGLOCKED_RECV,   ///< funding_locked受信通知
     LN_CB_CHANNEL_ANNO_RECV,    ///< channel_announcement受信通知
     LN_CB_NODE_ANNO_RECV,       ///< node_announcement受信通知
-    LN_CB_ANNO_SIGSED,          ///< announcement_signatures完了通知
     LN_CB_ADD_HTLC_RECV_PREV,   ///< update_add_htlc処理前通知
     LN_CB_ADD_HTLC_RECV,        ///< update_add_htlc受信通知
     LN_CB_FULFILL_HTLC_RECV,    ///< update_fulfill_htlc受信通知
@@ -754,6 +756,7 @@ typedef struct {
  */
 typedef struct {
     ucoin_tx_t              *p_tx;
+    uint64_t                amount;     //送金額[satoshi]
     bool                    ret;        //署名結果
 } ln_cb_funding_sign_t;
 
@@ -1223,17 +1226,6 @@ bool ln_noise_dec_msg(ln_self_t *self, ucoin_buf_t *pBuf);
 bool ln_recv(ln_self_t *self, const uint8_t *pData, uint16_t Len);
 
 
-/** 定期フラグ回収処理
- * どこかのタイミングで行う必要があるが、即時行うようなタイミングがないかもしれない処理。
- * 将来的には ln.c で吸収すべきと考えている。
- *      - funding_locked交換
- *      - announcement_signatures交換
- *
- * @param[in,out]       self        channel情報
- */
-void ln_flag_proc(ln_self_t *self);
-
-
 /** initメッセージ作成
  *
  * @param[in,out]       self            channel情報
@@ -1306,6 +1298,29 @@ void ln_open_announce_channel_clr(ln_self_t *self);
  *      - Establish完了以降に呼び出すこと。
  */
 bool ln_create_announce_signs(ln_self_t *self, ucoin_buf_t *pBufAnnoSigns);
+
+
+/** channel_update作成
+ *
+ * 現在時刻でchannel_updateを新規作成し、DB保存する。
+ *
+ * @param[in]   self
+ * @param[out]  pCnlUpd
+ * @retval      ture    成功
+ */
+bool ln_create_channel_update(ln_self_t *self, ucoin_buf_t *pCnlUpd);
+
+
+/** 相手のchannel_update取得
+ *
+ * DBから検索し、見つからなければfalseを返す
+ *
+ * @param[in]   self
+ * @param[out]  pCnlUpd     検索したchannel_updateパケット
+ * @param[out]  pMsg        (非NULL)pCnlUpdデコード結果
+ * @retval      ture    成功
+ */
+bool ln_get_channel_update_peer(const ln_self_t *self, ucoin_buf_t *pCnlUpd, ln_cnl_update_t *pMsg);
 
 
 /** channel_update更新
@@ -1539,6 +1554,28 @@ void ln_calc_preimage_hash(uint8_t *pHash, const uint8_t *pPreImage);
 void ln_create_reason_temp_node(ucoin_buf_t *pReason);
 
 
+/** channel_announcementデータ解析
+ *
+ * @param[out]  p_short_channel_id
+ * @param[out]  pNodeId1
+ * @param[out]  pNodeId2
+ * @param[in]   pData
+ * @param[in]   Len
+ * @retval  true        解析成功
+ */
+bool ln_getids_cnl_anno(uint64_t *p_short_channel_id, uint8_t *pNodeId1, uint8_t *pNodeId2, const uint8_t *pData, uint16_t Len);
+
+
+/** channel_updateデータ解析
+ *
+ * @param[out]  pUpd
+ * @param[in]   pData
+ * @param[in]   Len
+ * @retval  true        解析成功
+ */
+bool ln_getparams_cnl_upd(ln_cnl_update_t *pUpd, const uint8_t *pData, uint16_t Len);
+
+
 /********************************************************************
  * inline展開用
  ********************************************************************/
@@ -1663,6 +1700,17 @@ static inline bool ln_is_funder(const ln_self_t *self) {
  */
 static inline bool ln_is_funding(const ln_self_t *self) {
     return (self->fund_flag & LN_FUNDFLAG_FUNDING);
+}
+
+
+/** announcement_signatures交換済みかどうか
+ *
+ * @param[in]           self            channel情報
+ * @retval      true    announcement_signatures交換済み
+ * @retval      false   announcement_signatures未交換
+ */
+static inline bool ln_is_announced(const ln_self_t *self) {
+    return (self->anno_flag & LN_ANNO_FLAG_END);
 }
 
 

@@ -9,7 +9,7 @@ OUTPUT_BINARY_DIRECTORY = .
 #CFLAGS_USER += -DAPP_DEBUG_MEM
 ######################################
 
-include ../common.mak
+include ../options.mak
 
 #echo suspend
 ifeq ("$(VERBOSE)","1")
@@ -64,6 +64,10 @@ CFLAGS += -DNETKIND=$(NETKIND)
 
 ifeq ($(DISABLE_PRINTFUND),0)
 CFLAGS += -DUCOIN_USE_PRINTFUNC
+endif
+
+ifeq ($(ENABLE_DEVELOPER_MODE),1)
+CFLAGS += -DDEVELOPER_MODE
 endif
 
 ######################################

@@ -79,6 +79,7 @@ typedef struct {
 static bool getblocktx(json_t **ppRoot, json_t **ppJsonTx, char **ppBufJson, int BHeight);
 static bool getraw_tx(json_t **ppRoot, json_t **ppResult, char **ppJson, const uint8_t *pTxid);
 static bool getraw_txstr(ucoin_tx_t *pTx, const char *txid);
+static bool gettxout(bool *pUnspent, uint64_t *pSat, const uint8_t *pTxid, uint32_t VIndex);
 static bool search_outpoint(ucoin_tx_t *pTx, int BHeight, const uint8_t *pTxid, uint32_t VIndex);
 static bool search_vout_block(ucoin_buf_t *pTxBuf, int BHeight, const ucoin_buf_t *pVout);
 
@@ -160,14 +161,14 @@ int32_t btcrpc_getblockcount(void)
 }
 
 
-bool btcrpc_getblockhash(uint8_t *pHash, int Height)
+bool btcrpc_getgenesisblock(uint8_t *pHash)
 {
     bool ret;
     char *p_json = NULL;
     json_t *p_root = NULL;
     json_t *p_result;
 
-    ret = getblockhash_rpc(&p_root, &p_result, &p_json, Height);
+    ret = getblockhash_rpc(&p_root, &p_result, &p_json, 0);
     if (ret && json_is_string(p_result)) {
         ret = misc_str2bin(pHash, LN_SZ_HASH, (const char *)json_string_value(p_result));
     } else {
@@ -279,15 +280,13 @@ LABEL_EXIT:
 }
 
 
-bool btcrpc_is_short_channel_unspent(int BHeight, int BIndex, uint32_t VIndex)
+bool btcrpc_gettxid_from_short_channel(uint8_t *pTxid, int BHeight, int BIndex)
 {
     bool unspent = true;        //エラーでもunspentにしておく
     bool ret;
     char *p_json = NULL;
     json_t *p_root = NULL;
     json_t *p_tx = NULL;
-    json_t *p_result;
-    char txid[UCOIN_SZ_TXID * 2 + 1] = "";
 
     ret = getblocktx(&p_root, &p_tx, &p_json, BHeight);
     if (ret) {
@@ -297,31 +296,17 @@ bool btcrpc_is_short_channel_unspent(int BHeight, int BIndex, uint32_t VIndex)
 
         json_array_foreach(p_tx, index, p_value) {
             if ((int)index == BIndex) {
-                strcpy(txid, (const char *)json_string_value(p_value));
+                //TXIDはLE/BE変換
+                misc_str2bin_rev(pTxid, UCOIN_SZ_TXID, (const char *)json_string_value(p_value));
                 break;
             }
         }
     } else {
-        LOGD("fail: getblock_rpc\n");
-        goto LABEL_EXIT;
+        LOGD("fail: getblocktx\n");
     }
     if (p_root != NULL) {
         json_decref(p_root);
         p_root = NULL;
-    }
-    APP_FREE(p_json);
-
-    //TXID→spent/unspent
-    ret = gettxout_rpc(&p_root, &p_result, &p_json, txid, VIndex);
-    if (ret) {
-        unspent = !json_is_null(p_result);
-    } else {
-        LOGD("fail: gettxout_rpc\n");
-    }
-
-LABEL_EXIT:
-    if (p_root != NULL) {
-        json_decref(p_root);
     }
     APP_FREE(p_json);
 
@@ -367,8 +352,10 @@ bool btcrpc_search_vout(ucoin_buf_t *pTxBuf, uint32_t Blks, const ucoin_buf_t *p
 }
 
 
-bool btcrpc_signraw_tx(ucoin_tx_t *pTx, const uint8_t *pData, size_t Len)
+bool btcrpc_signraw_tx(ucoin_tx_t *pTx, const uint8_t *pData, size_t Len, uint64_t Amount)
 {
+    (void)Amount;
+
     bool result = false;
     bool ret;
     char *p_json = NULL;
@@ -409,7 +396,7 @@ bool btcrpc_signraw_tx(ucoin_tx_t *pTx, const uint8_t *pData, size_t Len)
 }
 
 
-bool btcrpc_sendraw_tx(uint8_t *pTxid, int *pCode, const uint8_t *pData, uint32_t Len)
+bool btcrpc_sendraw_tx(uint8_t *pTxid, int *pCode, const uint8_t *pRawData, uint32_t Len)
 {
     bool result = false;
     bool ret;
@@ -419,7 +406,7 @@ bool btcrpc_sendraw_tx(uint8_t *pTxid, int *pCode, const uint8_t *pData, uint32_
     json_t *p_result;
 
     transaction = (char *)APP_MALLOC(Len * 2 + 1);
-    ucoin_util_bin2str(transaction, pData, Len);
+    ucoin_util_bin2str(transaction, pRawData, Len);
 
     ret = sendrawtransaction_rpc(&p_root, &p_result, &p_json, transaction);
     APP_FREE(transaction);
@@ -459,42 +446,15 @@ bool btcrpc_is_tx_broadcasted(const uint8_t *pTxid)
 
 bool btcrpc_check_unspent(bool *pUnspent, uint64_t *pSat, const uint8_t *pTxid, uint32_t VIndex)
 {
-    bool ret;
-    char *p_json = NULL;
-    char txid[UCOIN_SZ_TXID * 2 + 1];
-    *pUnspent = false;
-    json_t *p_root = NULL;
-    json_t *p_result;
-
-    //TXIDはBE/LE変換
-    ucoin_util_bin2str_rev(txid, pTxid, UCOIN_SZ_TXID);
-
-    //まずtxの存在確認を行う
-    ret = getraw_txstr(NULL, txid);
-    if (!ret) {
-        //LOGD("fail: maybe not broadcasted\n");
-        goto LABEL_EXIT;
+    bool unspent = true;
+    uint64_t sat = 0;
+    bool ret = gettxout(&unspent, &sat, pTxid, VIndex);
+    if (pUnspent != NULL) {
+        *pUnspent = unspent;
     }
-
-    ret = gettxout_rpc(&p_root, &p_result, &p_json, txid, VIndex);
-    if (ret) {
-        json_t *p_value;
-
-        p_value = json_object_get(p_result, M_VALUE);
-        if (p_value && json_is_real(p_value)) {
-            double dval = json_real_value(p_value);
-            *pSat = UCOIN_BTC2SATOSHI(dval);
-            *pUnspent = true;
-        }
-    } else {
-        LOGD("fail: gettxout_rpc()\n");
+    if (pSat != NULL) {
+        *pSat = sat;
     }
-
-LABEL_EXIT:
-    if (p_root != NULL) {
-        json_decref(p_root);
-    }
-    APP_FREE(p_json);
 
     return ret;
 }
@@ -686,6 +646,51 @@ LABEL_EXIT:
 }
 
 
+static bool gettxout(bool *pUnspent, uint64_t *pSat, const uint8_t *pTxid, uint32_t VIndex)
+{
+    bool ret;
+    char *p_json = NULL;
+    char txid[UCOIN_SZ_TXID * 2 + 1];
+    *pUnspent = true;
+    *pSat = 0;
+    json_t *p_root = NULL;
+    json_t *p_result;
+
+    //TXIDはBE/LE変換
+    ucoin_util_bin2str_rev(txid, pTxid, UCOIN_SZ_TXID);
+
+    //まずtxの存在確認を行う
+    ret = getraw_txstr(NULL, txid);
+    if (!ret) {
+        //LOGD("fail: maybe not broadcasted\n");
+        goto LABEL_EXIT;
+    }
+
+    ret = gettxout_rpc(&p_root, &p_result, &p_json, txid, VIndex);
+    if (ret) {
+        json_t *p_value;
+
+        p_value = json_object_get(p_result, M_VALUE);
+        if (p_value && json_is_real(p_value)) {
+            double dval = json_real_value(p_value);
+            *pSat = UCOIN_BTC2SATOSHI(dval);
+        } else {
+            *pUnspent = false;
+        }
+    } else {
+        LOGD("fail: gettxout_rpc()\n");
+    }
+
+LABEL_EXIT:
+    if (p_root != NULL) {
+        json_decref(p_root);
+    }
+    APP_FREE(p_json);
+
+    return ret;
+}
+
+
 /** [bitcoin rpc]blockからvin[0]のoutpointが一致するトランザクションを検索
  *
  * @param[out]  pTx         トランザクション情報
@@ -745,7 +750,7 @@ static bool search_outpoint(ucoin_tx_t *pTx, int BHeight, const uint8_t *pTxid, 
 /** [bitcoin rpc]blockからvoutが一致するtransactionを検索
  * @param[out]  pTxBuf      トランザクション情報(ucoin_tx_tの配列を保存する)
  * @param[in]   BHeight     block height
- * @param[in]   pVout       vout
+ * @param[in]   pVout       vout(ucoin_buf_tの配列)
  * @retval  true        検索成功(1つでも見つかった)
  * @note
  *      - pTxBufの扱いに注意すること
@@ -1231,80 +1236,81 @@ int main(int argc, char *argv[])
 
     bool ret;
 
-//    fprintf(PRINTOUT, "-[getblockcount]-------------------------\n");
+//    fprintf(stderr, "-[getblockcount]-------------------------\n");
 //    int blocks = getblockcount();
-//    fprintf(PRINTOUT, "blocks = %d\n", blocks);
+//    fprintf(stderr, "blocks = %d\n", blocks);
 
-//    fprintf(PRINTOUT, "-[short_channel_info]-------------------------\n");
+//    fprintf(stderr, "-[short_channel_info]-------------------------\n");
 //    int bindex;
 //    int bheight;
 //    ret = btcrpc_get_short_channel_param(&bindex, &bheight, TXID);
 //    if (ret) {
-//        fprintf(PRINTOUT, "index = %d\n", bindex);
-//        fprintf(PRINTOUT, "height = %d\n", bheight);
+//        fprintf(stderr, "index = %d\n", bindex);
+//        fprintf(stderr, "height = %d\n", bheight);
 //    }
 
 //    int conf;
-//    fprintf(PRINTOUT, "-conf-------------------------\n");
+//    fprintf(stderr, "-conf-------------------------\n");
 //    conf = btcrpc_get_confirmation(TXID);
-//    fprintf(PRINTOUT, "confirmations = %d\n", conf);
+//    fprintf(stderr, "confirmations = %d\n", conf);
 
-//    fprintf(PRINTOUT, "-getnewaddress-------------------------\n");
+//    fprintf(stderr, "-getnewaddress-------------------------\n");
 //    char addr[UCOIN_SZ_ADDR_MAX];
 //    ret = btcrpc_getnewaddress(addr);
 //    if (ret) {
-//        fprintf(PRINTOUT, "addr=%s\n", addr);
+//        fprintf(stderr, "addr=%s\n", addr);
 //    }
 
-//    fprintf(PRINTOUT, "-dumpprivkey-------------------------\n");
+//    fprintf(stderr, "-dumpprivkey-------------------------\n");
 //    char wif[UCOIN_SZ_WIF_MAX];
 //    ret = btcrpc_dumpprivkey(wif, addr);
 //    if (ret) {
-//        fprintf(PRINTOUT, "wif=%s\n", wif);
+//        fprintf(stderr, "wif=%s\n", wif);
 //    }
 
-    //fprintf(PRINTOUT, "-gettxout-------------------------\n");
+    //fprintf(stderr, "-gettxout-------------------------\n");
     //bool unspent;
     //uint64_t value;
     //ret = btcrpc_check_unspent(&unspent, &value, TXID, 1);
     //if (ret && unspent) {
-    //    fprintf(PRINTOUT, "value=%" PRIu64 "\n", value);
+    //    fprintf(stderr, "value=%" PRIu64 "\n", value);
     //}
 
-//    fprintf(PRINTOUT, "-getrawtx------------------------\n");
+//    fprintf(stderr, "-getrawtx------------------------\n");
 //    ret = btcrpc_is_tx_broadcasted(TXID);
-//    fprintf(PRINTOUT, "ret=%d\n", ret);
+//    fprintf(stderr, "ret=%d\n", ret);
 
-//    fprintf(PRINTOUT, "--------------------------\n");
+//    fprintf(stderr, "--------------------------\n");
 //    uint8_t txid[UCOIN_SZ_TXID];
 //    bool ret = btcrpc_sendraw_tx(txid, NULL, TX, sizeof(TX));
 //    if (ret) {
 //        for (int lp = 0; lp < sizeof(txid); lp++) {
-//            fprintf(PRINTOUT, "%02x", txid[lp]);
+//            fprintf(stderr, "%02x", txid[lp]);
 //        }
-//        fprintf(PRINTOUT, "\n");
+//        fprintf(stderr, "\n");
 //    }
 
-    // fprintf(PRINTOUT, "--------------------------\n");
+    // fprintf(stderr, "--------------------------\n");
     // {
     //     uint32_t bheight;
     //     uint32_t bindex;
     //     uint32_t vindex;
     //     bool unspent;
     //     uint64_t short_channel_id;
+    //     uint8_t txid[UCOIN_SZ_TXID];
 
     //     short_channel_id = 0x11a7810000440000ULL;
     //     ln_get_short_channel_id_param(&bheight, &bindex, &vindex, short_channel_id);
-    //     unspent = btcrpc_is_short_channel_unspent(bheight, bindex, vindex);
-    //     fprintf(PRINTOUT, "%016" PRIx64 " = %d\n", short_channel_id, unspent);
+    //     unspent = btcrpc_gettxid_from_short_channel(txid, bheight, bindex);
+    //     fprintf(stderr, "%016" PRIx64 " = %d\n", short_channel_id, unspent);
 
     //     short_channel_id = 0x11a2eb0000210000ULL;
     //     ln_get_short_channel_id_param(&bheight, &bindex, &vindex, short_channel_id);
-    //     unspent = btcrpc_is_short_channel_unspent(bheight, bindex, vindex);
-    //     fprintf(PRINTOUT, "%016" PRIx64 " = %d\n", short_channel_id, unspent);
+    //     unspent = btcrpc_gettxid_from_short_channel(txid, bheight, bindex);
+    //     fprintf(stderr, "%016" PRIx64 " = %d\n", short_channel_id, unspent);
     // }
 
-    fprintf(PRINTOUT, "--------------------------\n");
+    fprintf(stderr, "--------------------------\n");
     {
         uint64_t feeperrate;
         bool ret = btcrpc_estimatefee(&feeperrate, 3);
@@ -1315,7 +1321,7 @@ int main(int argc, char *argv[])
         }
     }
 
-    fprintf(PRINTOUT, "--------------------------\n");
+    fprintf(stderr, "--------------------------\n");
 
     btcrpc_term();
     ucoin_term();
