@@ -52,8 +52,6 @@ extern "C" {
 #define LN_SZ_ONION_ROUTE               (1366)      ///< サイズ:onion-routing-packet
 #define LN_SZ_ALIAS                     (32)        ///< サイズ:alias長
 #define LN_SZ_NOISE_HEADER              (sizeof(uint16_t) + 16)     ///< サイズ:noiseパケットヘッダ
-#define LN_SZ_GFLEN_MAX                 (4)         ///< サイズ:init.gflen最大
-#define LN_SZ_LFLEN_MAX                 (4)         ///< サイズ:init.lflen最大
 #define LN_SZ_FUNDINGTX_VSIZE           (177)       ///< サイズ:funding_txのvsize(nested in BIP16 P2SH形式)
 #define LN_SZ_ERRMSG                    (256)       ///< サイズ:last error文字列
 
@@ -108,6 +106,14 @@ extern "C" {
                                                     ///< コメントアウトするとDB保存しなくなるが、revoked transaction closeから取り戻すために
                                                     ///< 相手のアクションが必要となる
 
+#define LN_INIT_LF_OPT_DATALOSS_REQ     (1 << 0)    ///< option_data_loss_protect
+#define LN_INIT_LF_OPT_DATALOSS_OPT     (1 << 1)    ///< option_data_loss_protect
+#define LN_INIT_LF_ROUTE_SYNC           (1 << 3)    ///< initial_routing_sync
+#define LN_INIT_LF_OPT_UPF_SHDN_REQ     (1 << 4)    ///< option_upfront_shutdown_script
+#define LN_INIT_LF_OPT_UPF_SHDN_OPT     (1 << 5)    ///< option_upfront_shutdown_script
+#define LN_INIT_LF_OPT_GSP_QUERY_REQ    (1 << 6)    ///< gossip_queries
+#define LN_INIT_LF_OPT_GSP_QUERY_OPT    (1 << 7)    ///< gossip_queries
+
 
 /**************************************************************************
  * macro functions
@@ -161,6 +167,15 @@ typedef struct ln_self_t ln_self_t;
 typedef struct ln_fieldr_t ln_fieldr_t;
 
 
+// ln_self_t.status
+typedef enum {
+    LN_STATUS_NONE,
+    LN_STATUS_ESTABLISH,
+    LN_STATUS_NORMAL,
+    LN_STATUS_CLOSING,
+} ln_status_t;
+
+
 // node_announcement address descriptor
 typedef enum {
     LN_NODEDESC_NONE,           ///< 0: padding. data = none (length 0)
@@ -192,7 +207,7 @@ typedef enum {
     LN_CB_FUNDINGTX_WAIT,       ///< funding_tx安定待ち要求
     LN_CB_FUNDINGLOCKED_RECV,   ///< funding_locked受信通知
     LN_CB_CHANNEL_ANNO_RECV,    ///< channel_announcement受信通知
-    LN_CB_NODE_ANNO_RECV,       ///< node_announcement受信通知
+    LN_CB_UPDATE_ANNODB,        ///< announcement DB更新通知
     LN_CB_ADD_HTLC_RECV_PREV,   ///< update_add_htlc処理前通知
     LN_CB_ADD_HTLC_RECV,        ///< update_add_htlc受信通知
     LN_CB_FULFILL_HTLC_RECV,    ///< update_fulfill_htlc受信通知
@@ -337,8 +352,10 @@ typedef struct {
 typedef struct {
     uint8_t                     txid[UCOIN_SZ_TXID];            ///< 2-of-2へ入金するTXID
     int32_t                     index;                          ///< 未設定時(channelを開かれる方)は-1
+#ifndef USE_SPV
     uint64_t                    amount;                         ///< 2-of-2へ入金するtxのvout amount
-    char                        change_addr[UCOIN_SZ_ADDR_MAX]; ///< 2-of-2へ入金したお釣りの送金先アドレス(未使用時:NULL)
+#endif
+    ucoin_buf_t                 change_spk;                     ///< 2-of-2へ入金したお釣りの送金先ScriptPubkey
 } ln_fundin_t;
 
 
@@ -367,7 +384,9 @@ typedef struct {
     ln_funding_created_t        cnl_funding_created;            ///< 送信 or 受信したfunding_created
     ln_funding_signed_t         cnl_funding_signed;             ///< 送信 or 受信したfunding_signed
 
+#ifndef USE_SPV
     ln_fundin_t                 *p_fundin;                      ///< 非NULL:open_channel側
+#endif
     ln_establish_prm_t          estprm;                         ///< channel establish parameter
 } ln_establish_t;
 
@@ -518,6 +537,9 @@ typedef struct {
     uint8_t     *p_channel_id;                      ///< 32: channel-id
     uint64_t    next_local_commitment_number;       ///< 8:  next_local_commitment_number
     uint64_t    next_remote_revocation_number;      ///< 8:  next_remote_revocation_number
+    bool        option_data_loss_protect;           ///< true:your_last_per_commitment_secretとmy_current_per_commitment_pointが有効
+    uint8_t     your_last_per_commitment_secret[UCOIN_SZ_PRIVKEY];      ///< 32: your_last_per_commitment_secret
+    uint8_t     my_current_per_commitment_point[UCOIN_SZ_PUBKEY];       ///< 33: my_current_per_commitment_point
 } ln_channel_reestablish_t;
 
 /// @}
@@ -564,7 +586,7 @@ typedef struct {
  *      - p_dataはMALLOC()で確保するため、呼び出し元がMFREE()で解放すること
  */
 typedef struct {
-    uint8_t     channel_id[LN_SZ_CHANNEL_ID];       ///< 32: channel-id
+    uint8_t     *channel_id;                        ///< 32: channel-id
     uint16_t    len;                                ///< 2: byteslen
     char        *p_data;                            ///< エラー文字列(\0あり)
 } ln_error_t;
@@ -856,6 +878,14 @@ typedef struct {
 } ln_cb_channel_anno_recv_t;
 
 
+/** @struct ln_cb_update_annodb_t
+ *  @brief  announcement DB更新通知(#LN_CB_UPDATE_ANNODB)
+ */
+typedef struct {
+    uint16_t                anno;       //BOLT message type
+} ln_cb_update_annodb_t;
+
+
 /**************************************************************************
  * typedefs : 管理データ
  **************************************************************************/
@@ -930,7 +960,9 @@ typedef struct {
                                                         // remoteには相手から受信した署名
     uint8_t             txid[UCOIN_SZ_TXID];            ///< txid
     uint16_t            htlc_num;                       ///< commit_tx中のHTLC数
-    uint64_t            commit_num;                     ///< commitment_signed送信後にインクリメントする48bitカウンタ(0～)
+    uint64_t            commit_num;                     ///< commitment_number
+                                                        //      commitment_signed送受信でインクリメントする
+    uint64_t            revoke_num;                     ///< 最後にrevoke_and_ack送信した時のcommitment_number
 } ln_commit_data_t;
 
 
@@ -945,7 +977,10 @@ typedef struct {
 
 
 typedef struct {
-    uint64_t                    storage_index;                  ///< 現在のindex
+    uint64_t                    storage_index;                  ///< 自分のstorage_index
+                                                                //      鍵生成してからデクリメントするため、次に生成する際のindexを指している。
+                                                                //      初期値は0xFFFFFFFFFFFF(48bit)。
+                                                                //      初回のcommit_txは0xFF...FFで作成することになる。
     uint8_t                     storage_seed[LN_SZ_SEED];       ///< ユーザから指定されたseed
 
     uint8_t                     priv[LN_FUNDIDX_MAX][UCOIN_SZ_PRIVKEY];
@@ -957,12 +992,14 @@ typedef struct {
  */
 struct ln_self_t {
     uint8_t                     peer_node_id[UCOIN_SZ_PUBKEY];  ///< 接続先ノード
+    uint8_t                     status;
 
     ln_self_priv_t              priv_data;
 
     //key storage
     ln_derkey_storage           peer_storage;                   ///< key storage(peer)
-    uint64_t                    peer_storage_index;             ///< 現在のindex(peer)
+    uint64_t                    peer_storage_index;             ///< storage index(peer)
+                                                                //      鍵保存してからデクリメントするため、次に保存する際のindexを指している
 
     //funding
     ln_fundflag_t               fund_flag;                      ///< none/funder/fundee
@@ -973,6 +1010,10 @@ struct ln_self_t {
     ucoin_buf_t                 redeem_fund;                    ///< 2-of-2のredeemScript
     ucoin_keys_sort_t           key_fund_sort;                  ///< 2-of-2のソート順(local, remoteを正順とした場合)
     ucoin_tx_t                  tx_funding;                     ///< funding_tx
+#ifndef USE_SPV
+#else
+    uint8_t                     funding_bhash[UCOIN_SZ_SHA256]; ///< funding_txがマイニングされたblock hash
+#endif
     ln_establish_t              *p_establish;                   ///< Establishワーク領域
     uint32_t                    min_depth;                      ///< minimum_depth
 
@@ -1065,6 +1106,22 @@ bool ln_init(ln_self_t *self, const uint8_t *pSeed, const ln_anno_prm_t *pAnnoPr
 void ln_term(ln_self_t *self);
 
 
+/** status設定
+ *
+ * @param[in,out]       self            channel情報
+ * @param[in]           Status          設定値
+ */
+void ln_set_status(ln_self_t *self, ln_status_t Status);
+
+
+/** status設定
+ *
+ * @param[in,out]       self            channel情報
+ * @param[in]           Status          設定値
+ */
+ln_status_t ln_get_status(const ln_self_t *self);
+
+
 /** Genesis Block Hash設定
  *
  * @param[in]       pHash               Genesis Block Hash
@@ -1087,6 +1144,13 @@ const uint8_t* ln_get_genesishash(void);
  *
  */
 void ln_set_peer_nodeid(ln_self_t *self, const uint8_t *pNodeId);
+
+
+/** init.localfeatures設定
+ * 未設定の場合はデフォルト値が使用される。
+ *
+ */
+void ln_set_init_localfeatures(uint8_t lf);
 
 
 /** Channel Establish設定
@@ -1115,10 +1179,11 @@ void ln_free_establish(ln_self_t *self);
  * @param[in]           Height          funding_txが入ったブロック height
  * @param[in]           Index           funding_txのTXIDが入っているindex
  * @param[in]           FundingIndex    funding_tx vout in channel
+ * @param[in]           pMinedHash      funding_txがマイニングされたblock hash
  * @note
  *      - #LN_CB_FUNDINGTX_WAIT でコールバックされた後、安定後に呼び出すこと
  */
-void ln_set_short_channel_id_param(ln_self_t *self, uint32_t Height, uint32_t Index, uint32_t FundingIndex);
+void ln_set_short_channel_id_param(ln_self_t *self, uint32_t Height, uint32_t Index, uint32_t FundingIndex, const uint8_t *pMinedHash);
 
 
 /** short_channel_id情報取得
@@ -1131,27 +1196,12 @@ void ln_set_short_channel_id_param(ln_self_t *self, uint32_t Height, uint32_t In
 void ln_get_short_channel_id_param(uint32_t *pHeight, uint32_t *pIndex, uint32_t *pVIndex, uint64_t ShortChannelId);
 
 
-/** shutdown時の出力先設定(pubkey)
- *
- * @param[in,out]       self            channel情報
- * @param[in]           pShutdownPubkey shutdown時のscriptPubKey用公開鍵
- * @param[in]           ShutdownPref    pShutdownPubkey用(UCOIN_PREF_P2PKH or UCOIN_PREF_NATIVE)
- * @retval      true    成功
- * @note
- *      - #ln_set_shutdown_vout_pubkey()か #ln_set_shutdown_vout_addr()のどちらかを設定する。
- */
-//bool ln_set_shutdown_vout_pubkey(ln_self_t *self, const uint8_t *pShutdownPubkey, int ShutdownPref);
-
-
 /** shutdown時の出力先設定(address)
  *
  * @param[in,out]       self            channel情報
- * @param[in]           pAddr           shutdown時のアドレス
- * @retval      true    成功
- * @note
- *      - #ln_set_shutdown_vout_pubkey()か #ln_set_shutdown_vout_addr()のどちらかを設定する。
+ * @param[in]           pScriptPk       shutdown時の送金先ScriptPubKey
  */
-bool ln_set_shutdown_vout_addr(ln_self_t *self, const char *pAddr);
+void ln_set_shutdown_vout_addr(ln_self_t *self, const ucoin_buf_t *pScriptPk);
 
 
 /** noise handshake開始
@@ -1703,6 +1753,29 @@ static inline bool ln_is_funding(const ln_self_t *self) {
 }
 
 
+#ifndef USE_SPV
+#else
+/** funding_tx
+ *
+ * @param[in]           self            channel情報
+ * @return      funding_tx
+ */
+static inline const ucoin_tx_t *ln_funding_tx(const ln_self_t *self) {
+    return &self->tx_funding;
+}
+
+
+/** funding_txがマイニングされたblock hash
+ *
+ * @param[in]           self            channel情報
+ * @return      block hash
+ */
+static inline const uint8_t *ln_funding_blockhash(const ln_self_t *self) {
+    return self->funding_bhash;
+}
+#endif
+
+
 /** announcement_signatures交換済みかどうか
  *
  * @param[in]           self            channel情報
@@ -1787,16 +1860,6 @@ static inline uint64_t ln_estimate_fundingtx_fee(uint32_t FeeratePerKw) {
  */
 static inline uint64_t ln_calc_max_closing_fee(const ln_self_t *self) {
     return (LN_FEE_COMMIT_BASE * self->feerate_per_kw / 1000);
-}
-
-
-/** closing_signed受信歴取得
- *
- * @param[in]           self            channel情報
- * @retval      true    closing_signedを受信したことがある
- */
-static inline bool ln_is_closing_signed_recvd(const ln_self_t *self) {
-    return (self->obscured == 0);
 }
 
 

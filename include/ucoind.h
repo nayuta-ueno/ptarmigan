@@ -161,8 +161,8 @@ typedef enum {
 } trans_cmd_t;
 
 
-/** @struct     daemon_connect_t
- *  @brief      daemon接続情報
+/** @struct     peer_conn_t
+ *  @brief      peer接続情報
  *  @note
  *      - #peer_conf_t と同じ構造だが、別にしておく(統合する可能性あり)
  */
@@ -171,7 +171,7 @@ typedef struct {
     char        ipaddr[SZ_IPV4_LEN + 1];
     uint16_t    port;
     uint8_t     node_id[UCOIN_SZ_PUBKEY];
-} daemon_connect_t;
+} peer_conn_t;
 
 
 /** @struct     funding_conf_t
@@ -210,7 +210,7 @@ typedef struct {
 /** @struct     peer_conf_t
  *  @brief      peer node接続情報
  *  @note
- *      - #daemon_connect_t と同じ構造だが、別にしておく
+ *      - #peer_conn_t と同じ構造だが、別にしておく
  */
 typedef struct {
     char            ipaddr[SZ_IPV4_LEN + 1];
@@ -230,8 +230,8 @@ typedef struct {
 } anno_conf_t;
 
 
-/** @struct     establish_conf_t
- *  @brief      establish channel情報
+/** @struct     channel_conf_t
+ *  @brief      channel設定情報
  */
 typedef struct {
     uint64_t    dust_limit_sat;                     ///< 8 : dust-limit-satoshis
@@ -241,7 +241,9 @@ typedef struct {
     uint16_t    to_self_delay;                      ///< 2 : to-self-delay
     uint16_t    max_accepted_htlcs;                 ///< 2 : max-accepted-htlcs
     uint32_t    min_depth;                          ///< 4 : minimum-depth(acceptのみ)
-} establish_conf_t;
+
+    uint8_t     localfeatures;                      ///< init.localfeatures
+} channel_conf_t;
 
 
 /** @struct fwd_proc_add_t

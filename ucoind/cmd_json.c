@@ -104,7 +104,7 @@ static cJSON *cmd_disautoconn(jrpc_context *ctx, cJSON *params, cJSON *id);
 static cJSON *cmd_removechannel(jrpc_context *ctx, cJSON *params, cJSON *id);
 static cJSON *cmd_setfeerate(jrpc_context *ctx, cJSON *params, cJSON *id);
 
-static int cmd_connect_proc(const daemon_connect_t *pConn, jrpc_context *ctx);
+static int cmd_connect_proc(const peer_conn_t *pConn, jrpc_context *ctx);
 static int cmd_disconnect_proc(const uint8_t *pNodeId);
 static int cmd_stop_proc(void);
 static int cmd_fund_proc(const uint8_t *pNodeId, const funding_conf_t *pFund);
@@ -120,8 +120,8 @@ static int cmd_routepay_proc2(
                 const char *pInvoiceStr, uint64_t AddAmountMsat);
 static int cmd_close_proc(bool *bMutual, const uint8_t *pNodeId);
 
-static bool json_connect(cJSON *params, int *pIndex, daemon_connect_t *pConn);
-static char *create_bolt11(const uint8_t *pPayHash, uint64_t Amount, uint32_t Expiry, const ln_fieldr_t *pFieldR, uint8_t FieldRNum);
+static bool json_connect(cJSON *params, int *pIndex, peer_conn_t *pConn);
+static char *create_bolt11(const uint8_t *pPayHash, uint64_t Amount, uint32_t Expiry, const ln_fieldr_t *pFieldR, uint8_t FieldRNum, uint32_t MinFinalCltvExpiry);
 static void create_bolt11_rfield(ln_fieldr_t **ppFieldR, uint8_t *pFieldRNum);
 static bool comp_func_cnl(ln_self_t *self, void *p_db_param, void *p_param);
 static lnapp_conf_t *search_connected_lnapp_node(const uint8_t *p_node_id);
@@ -220,7 +220,7 @@ static cJSON *cmd_connect(jrpc_context *ctx, cJSON *params, cJSON *id)
     (void)id;
 
     int err = RPCERR_PARSE;
-    daemon_connect_t conn;
+    peer_conn_t conn;
     cJSON *result = NULL;
     int index = 0;
 
@@ -306,7 +306,7 @@ static cJSON *cmd_disconnect(jrpc_context *ctx, cJSON *params, cJSON *id)
     (void)id;
 
     int err = RPCERR_PARSE;
-    daemon_connect_t conn;
+    peer_conn_t conn;
     cJSON *result = NULL;
     int index = 0;
 
@@ -360,7 +360,7 @@ static cJSON *cmd_fund(jrpc_context *ctx, cJSON *params, cJSON *id)
 
     int err = RPCERR_PARSE;
     cJSON *json;
-    daemon_connect_t conn;
+    peer_conn_t conn;
     funding_conf_t fundconf;
     cJSON *result = NULL;
     int index = 0;
@@ -413,7 +413,6 @@ static cJSON *cmd_fund(jrpc_context *ctx, cJSON *params, cJSON *id)
         //デフォルト値
         fundconf.feerate_per_kw = 0;
     }
-    print_funding_conf(&fundconf);
 
 
     err = cmd_fund_proc(conn.node_id, &fundconf);
@@ -442,6 +441,7 @@ static cJSON *cmd_invoice(jrpc_context *ctx, cJSON *params, cJSON *id)
     uint64_t amount = 0;
     cJSON *result = NULL;
     int index = 0;
+    uint32_t min_final_cltv_expiry;
 
     if (params == NULL) {
         goto LABEL_EXIT;
@@ -455,6 +455,15 @@ static cJSON *cmd_invoice(jrpc_context *ctx, cJSON *params, cJSON *id)
     } else {
         goto LABEL_EXIT;
     }
+    //min_final_cltv_expiry
+    json = cJSON_GetArrayItem(params, index++);
+    if (json && (json->type == cJSON_Number) && (json->valueint != 0)) {
+        min_final_cltv_expiry = json->valueint;
+        LOGD("min_final_cltv_expiry=%" PRIu32 "\n", min_final_cltv_expiry);
+    } else {
+        //デフォルト値
+        min_final_cltv_expiry = LN_MIN_FINAL_CLTV_EXPIRY;
+    }
 
     uint8_t preimage_hash[LN_SZ_HASH];
     err = cmd_invoice_proc(preimage_hash, amount);
@@ -464,7 +473,9 @@ LABEL_EXIT:
         ln_fieldr_t *p_rfield = NULL;
         uint8_t rfieldnum = 0;
         create_bolt11_rfield(&p_rfield, &rfieldnum);
-        char *p_invoice = create_bolt11(preimage_hash, amount, LN_INVOICE_EXPIRY, p_rfield, rfieldnum);
+        char *p_invoice = create_bolt11(preimage_hash, amount,
+                            LN_INVOICE_EXPIRY, p_rfield, rfieldnum,
+                            min_final_cltv_expiry);
 
         if (p_invoice != NULL) {
             char str_hash[LN_SZ_HASH * 2 + 1];
@@ -839,7 +850,7 @@ static cJSON *cmd_close(jrpc_context *ctx, cJSON *params, cJSON *id)
     (void)id;
 
     int err = RPCERR_PARSE;
-    daemon_connect_t conn;
+    peer_conn_t conn;
     cJSON *result = NULL;
     int index = 0;
     bool b_mutual;
@@ -877,7 +888,7 @@ static cJSON *cmd_getlasterror(jrpc_context *ctx, cJSON *params, cJSON *id)
 {
     (void)id;
 
-    daemon_connect_t conn;
+    peer_conn_t conn;
     int index = 0;
 
     //connect parameter
@@ -967,7 +978,7 @@ static cJSON *cmd_getcommittx(jrpc_context *ctx, cJSON *params, cJSON *id)
 {
     (void)id;
 
-    daemon_connect_t conn;
+    peer_conn_t conn;
     cJSON *result = cJSON_CreateObject();
     int index = 0;
 
@@ -1101,7 +1112,7 @@ LABEL_EXIT:
  * @param[in,out]   ctx
  * @retval  エラーコード
  */
-static int cmd_connect_proc(const daemon_connect_t *pConn, jrpc_context *ctx)
+static int cmd_connect_proc(const peer_conn_t *pConn, jrpc_context *ctx)
 {
     LOGD("connect\n");
 
@@ -1444,7 +1455,7 @@ static int cmd_close_proc(bool *bMutual, const uint8_t *pNodeId)
 /** ucoincli -c解析
  *
  */
-static bool json_connect(cJSON *params, int *pIndex, daemon_connect_t *pConn)
+static bool json_connect(cJSON *params, int *pIndex, peer_conn_t *pConn)
 {
     cJSON *json;
 
@@ -1557,7 +1568,7 @@ static bool comp_func_cnl(ln_self_t *self, void *p_db_param, void *p_param)
 /** BOLT11文字列生成
  *
  */
-static char *create_bolt11(const uint8_t *pPayHash, uint64_t Amount, uint32_t Expiry, const ln_fieldr_t *pFieldR, uint8_t FieldRNum)
+static char *create_bolt11(const uint8_t *pPayHash, uint64_t Amount, uint32_t Expiry, const ln_fieldr_t *pFieldR, uint8_t FieldRNum, uint32_t MinFinalCltvExpiry)
 {
     uint8_t type;
     ucoin_genesis_t gtype = ucoin_util_get_genesis(ln_get_genesishash());
@@ -1577,7 +1588,8 @@ static char *create_bolt11(const uint8_t *pPayHash, uint64_t Amount, uint32_t Ex
     }
     char *p_invoice = NULL;
     if (type != UCOIN_GENESIS_UNKNOWN) {
-        ln_invoice_create(&p_invoice, type, pPayHash, Amount, Expiry, pFieldR, FieldRNum);
+        ln_invoice_create(&p_invoice, type,
+                pPayHash, Amount, Expiry, pFieldR, FieldRNum, MinFinalCltvExpiry);
     }
     return p_invoice;
 }

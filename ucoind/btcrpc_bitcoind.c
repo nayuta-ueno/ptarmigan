@@ -183,8 +183,9 @@ bool btcrpc_getgenesisblock(uint8_t *pHash)
 }
 
 
-uint32_t btcrpc_get_confirmation(const uint8_t *pTxid)
+uint32_t btcrpc_get_funding_confirm(const ln_self_t *self)
 {
+    const uint8_t *pTxid = ln_funding_txid(self);
     bool ret;
     int64_t confirmation = 0;
     char *p_json = NULL;
@@ -211,8 +212,11 @@ uint32_t btcrpc_get_confirmation(const uint8_t *pTxid)
 }
 
 
-bool btcrpc_get_short_channel_param(int *pBHeight, int *pBIndex, const uint8_t *pTxid)
+bool btcrpc_get_short_channel_param(const ln_self_t *self, int *pBHeight, int *pBIndex, uint8_t *pMinedHash, const uint8_t *pTxid)
 {
+    (void)self;
+    (void)pMinedHash;
+
     bool ret;
     char *p_json = NULL;
     char blockhash[UCOIN_SZ_SHA256 * 2 + 1] = "NG";
@@ -280,6 +284,7 @@ LABEL_EXIT:
 }
 
 
+//bitcoindのみ
 bool btcrpc_gettxid_from_short_channel(uint8_t *pTxid, int BHeight, int BIndex)
 {
     bool unspent = true;        //エラーでもunspentにしておく
@@ -433,8 +438,10 @@ bool btcrpc_sendraw_tx(uint8_t *pTxid, int *pCode, const uint8_t *pRawData, uint
 }
 
 
-bool btcrpc_is_tx_broadcasted(const uint8_t *pTxid)
+bool btcrpc_is_tx_broadcasted(const ln_self_t *self, const uint8_t *pTxid)
 {
+    (void)self;
+
     char txid[UCOIN_SZ_TXID * 2 + 1];
 
     //TXIDはBE/LE変換
@@ -460,7 +467,7 @@ bool btcrpc_check_unspent(bool *pUnspent, uint64_t *pSat, const uint8_t *pTxid, 
 }
 
 
-bool btcrpc_getnewaddress(char *pAddr)
+bool btcrpc_getnewaddress(ucoin_buf_t *pBuf)
 {
     bool result = false;
     bool ret;
@@ -471,8 +478,9 @@ bool btcrpc_getnewaddress(char *pAddr)
     ret = getnewaddress_rpc(&p_root, &p_result, &p_json);
     if (ret) {
         if (json_is_string(p_result)) {
-            strcpy(pAddr,  (const char *)json_string_value(p_result));
-            result = true;
+            char addr[UCOIN_SZ_ADDR_MAX];
+            strcpy(addr,  (const char *)json_string_value(p_result));
+            result = ucoin_keys_addr2spk(pBuf, addr);
         }
     } else {
         LOGD("fail: getnewaddress_rpc()\n");
@@ -523,6 +531,24 @@ bool btcrpc_estimatefee(uint64_t *pFeeSatoshi, int nBlocks)
     APP_FREE(p_json);
 
     return result;
+}
+
+
+void btcrpc_add_channel(const ln_self_t *self, uint64_t shortChannelId, const uint8_t *pTxBuf, uint32_t Len, bool bUnspent, const uint8_t *pMinedHash)
+{
+    (void)self; (void)shortChannelId; (void)pTxBuf; (void)Len; (void)bUnspent; (void)pMinedHash;
+}
+
+
+void btcrpc_set_fundingtx(const ln_self_t *self, const uint8_t *pTxBuf, uint32_t Len)
+{
+    (void)self; (void)pTxBuf; (void)Len;
+}
+
+
+void btcrpc_set_committxid(const ln_self_t *self)
+{
+    (void)self;
 }
 
 
@@ -1243,7 +1269,7 @@ int main(int argc, char *argv[])
 //    fprintf(stderr, "-[short_channel_info]-------------------------\n");
 //    int bindex;
 //    int bheight;
-//    ret = btcrpc_get_short_channel_param(&bindex, &bheight, TXID);
+//    ret = btcrpc_get_short_channel_param(NULL, &bindex, &bheight, NULL, TXID);
 //    if (ret) {
 //        fprintf(stderr, "index = %d\n", bindex);
 //        fprintf(stderr, "height = %d\n", bheight);
@@ -1251,7 +1277,7 @@ int main(int argc, char *argv[])
 
 //    int conf;
 //    fprintf(stderr, "-conf-------------------------\n");
-//    conf = btcrpc_get_confirmation(TXID);
+//    conf = btcrpc_get_funding_confirm(TXID);
 //    fprintf(stderr, "confirmations = %d\n", conf);
 
 //    fprintf(stderr, "-getnewaddress-------------------------\n");
@@ -1277,7 +1303,7 @@ int main(int argc, char *argv[])
     //}
 
 //    fprintf(stderr, "-getrawtx------------------------\n");
-//    ret = btcrpc_is_tx_broadcasted(TXID);
+//    ret = btcrpc_is_tx_broadcasted(NULL, TXID);
 //    fprintf(stderr, "ret=%d\n", ret);
 
 //    fprintf(stderr, "--------------------------\n");

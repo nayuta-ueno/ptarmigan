@@ -154,8 +154,11 @@ static void ln_print_self(const ln_self_t *self)
     ucoin_util_dumpbin(stdout, self->peer_node_id, UCOIN_SZ_PUBKEY, false);
     printf("\",\n");
 
+    //status
+    printf(INDENT3 M_QQ("status") ": \"%02x\",\n", self->status);
+
     //key storage
-    // printf(M_QQ("storage_index") ": " M_QQ("%016" PRIx64) ",\n", self->priv_data.storage_index);
+    printf(M_QQ("storage_index") ": " M_QQ("%016" PRIx64) ",\n", self->priv_data.storage_index);
     // printf(M_QQ("storage_seed") ": \"");
     // ucoin_util_dumpbin(stdout, self->priv_data.storage_seed, UCOIN_SZ_PRIVKEY, false);
     // printf("\",\n");
@@ -227,6 +230,14 @@ static void ln_print_self(const ln_self_t *self)
     //init
     printf(INDENT3 M_QQ("lfeature_remote") ": " M_QQ("%02x") ",\n", self->lfeature_remote);
 
+    //close
+    printf(INDENT3 M_QQ("close local scriptPubKey") ": \"");
+    ucoin_util_dumpbin(stdout, self->shutdown_scriptpk_local.buf, self->shutdown_scriptpk_local.len, false);
+    printf("\",\n");
+    printf(INDENT3 M_QQ("close remote scriptPubKey") ": \"");
+    ucoin_util_dumpbin(stdout, self->shutdown_scriptpk_remote.buf, self->shutdown_scriptpk_remote.len, false);
+    printf("\",\n");
+
     //normal operation
     printf(INDENT3 M_QQ("htlc_num") ": %d,\n", self->htlc_num);
     printf(INDENT3 M_QQ("htlc_id_num") ": %" PRIu64 ",\n", self->htlc_id_num);
@@ -275,7 +286,8 @@ static void ln_print_self(const ln_self_t *self)
     ucoin_util_dumptxid(stdout, self->commit_local.txid);
     printf("\",\n");
     printf(INDENT4 M_QQ("htlc_num") ": %" PRIu32 ",\n", self->commit_local.htlc_num);
-    printf(INDENT4 M_QQ("commit_num") ": %" PRIu64 "\n", self->commit_local.commit_num);
+    printf(INDENT4 M_QQ("commit_num") ": %" PRIu64 ",\n", self->commit_local.commit_num);
+    printf(INDENT4 M_QQ("revoke_num") ": %" PRIu64 "\n", self->commit_local.revoke_num);
 
     printf(INDENT3 "},\n");
 
@@ -290,7 +302,8 @@ static void ln_print_self(const ln_self_t *self)
     ucoin_util_dumptxid(stdout, self->commit_remote.txid);
     printf("\",\n");
     printf(INDENT4 M_QQ("htlc_num") ": %" PRIu32 ",\n", self->commit_remote.htlc_num);
-    printf(INDENT4 M_QQ("commit_num") ": %" PRIu64 "\n", self->commit_remote.commit_num);
+    printf(INDENT4 M_QQ("commit_num") ": %" PRIu64 ",\n", self->commit_remote.commit_num);
+    printf(INDENT4 M_QQ("revoke_num") ": %" PRIu64 "\n", self->commit_remote.revoke_num);
     printf(INDENT3 "},\n");
 
     printf(INDENT3 M_QQ("funding_sat") ": %" PRIu64 ",\n", self->funding_sat);
@@ -360,7 +373,7 @@ static void ln_print_announce_short(const uint8_t *pData, uint16_t Len)
                 printf(INDENT3 M_QQ("node") ": \"");
                 ucoin_util_dumpbin(stdout, node_pub, UCOIN_SZ_PUBKEY, false);
                 printf("\",\n");
-                char esc_alias[LN_SZ_ALIAS * 2];
+                char esc_alias[LN_SZ_ALIAS * 2 + 1];
                 escape_json_string(esc_alias, node_alias);
                 printf(INDENT3 M_QQ("alias") ": " M_QQ("%s") ",\n", esc_alias);
                 printf(INDENT3 M_QQ("rgbcolor") ": \"#%02x%02x%02x\",\n", msg.rgbcolor[0], msg.rgbcolor[1], msg.rgbcolor[2]);

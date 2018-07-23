@@ -109,10 +109,16 @@ int main(int argc, char *argv[])
     ln_nodeaddr_t *p_addr;
     char *p_alias;
     int opt;
+    uint16_t my_rpcport = 0;
+
+    const struct option OPTIONS[] = {
+        { "rpcport", required_argument, NULL, 'P' },
+        { 0, 0, 0, 0 }
+    };
 
     //`d` option is used to change working directory.
     // It is done at the beginning of this process.
-    while ((opt = getopt(argc, argv, M_OPTSTRING)) != -1) {
+    while ((opt = getopt_long(argc, argv, M_OPTSTRING, OPTIONS, NULL)) != -1) {
         switch (opt) {
         case 'd':
             if (chdir(optarg) != 0) {
@@ -135,28 +141,25 @@ int main(int argc, char *argv[])
     ulog_init();
 #endif
 
-    memset(&rpc_conf, 0, sizeof(rpc_conf_t));
 #ifndef NETKIND
 #error not define NETKIND
 #endif
 #if NETKIND==0
     bret = ucoin_init(UCOIN_MAINNET, true);
-    rpc_conf.rpcport = 8332;
 #elif NETKIND==1
     bret = ucoin_init(UCOIN_TESTNET, true);
-    rpc_conf.rpcport = 18332;
 #endif
-    strcpy(rpc_conf.rpcurl, "127.0.0.1");
     if (!bret) {
         fprintf(stderr, "fail: ucoin_init()\n");
         return -1;
     }
 
+    conf_btcrpc_init(&rpc_conf);
     p_addr->type = LN_NODEDESC_NONE;
     p_addr->port = 9735;
 
     int options = 0;
-    while ((opt = getopt(argc, argv, M_OPTSTRING)) != -1) {
+    while ((opt = getopt_long(argc, argv, M_OPTSTRING, OPTIONS, NULL)) != -1) {
         switch (opt) {
         //case 'd':
         //    //`d` option is used to change working directory.
@@ -180,10 +183,14 @@ int main(int argc, char *argv[])
             break;
         case 'c':
             //load btcconf file
-            bret = load_btcrpc_conf(optarg, &rpc_conf);
+            bret = conf_btcrpc_load(optarg, &rpc_conf);
             if (!bret) {
                 goto LABEL_EXIT;
             }
+            break;
+        case 'P':
+            //my rpcport num
+            my_rpcport = (uint16_t)atoi(optarg);
             break;
         // case 'i':
         //     //show node_id
@@ -220,7 +227,7 @@ int main(int argc, char *argv[])
 
     if ((strlen(rpc_conf.rpcuser) == 0) || (strlen(rpc_conf.rpcpasswd) == 0)) {
         //bitcoin.confから読込む
-        bret = load_btcrpc_default_conf(&rpc_conf);
+        bret = conf_btcrpc_load_default(&rpc_conf);
         if (!bret) {
             goto LABEL_EXIT;
         }
@@ -312,7 +319,7 @@ int main(int argc, char *argv[])
             "ucoind start: total_msat=%" PRIu64 "\n", total_amount);
 
     //ucoincli受信用
-    cmd_json_start(p_addr->port + 1);
+    cmd_json_start(my_rpcport ? my_rpcport : p_addr->port + 1);
 
     //待ち合わせ
     pthread_join(th_svr, NULL);
@@ -338,6 +345,8 @@ LABEL_EXIT:
     fprintf(stderr, "\t\t-c CONF_FILE : using bitcoin.conf(default: ~/.bitcoin/bitcoin.conf)\n");
     fprintf(stderr, "\t\t-a IPADDRv4 : announce IPv4 address(default: none)\n");
     // fprintf(stderr, "\t\t-i : show node_id(not start node)\n");
+    fprintf(stderr, "\t\t-d DIR_PATH : change working directory\n");
+    fprintf(stderr, "\t\t--rpcport PORT : JSON-RPC port(default: node port+1)\n");
     fprintf(stderr, "\t\t-x : erase current DB(without node_id)(TEST)\n");
     fprintf(stderr, "\t\t-N : erase node_announcement DB(TEST)\n");
     return -1;
