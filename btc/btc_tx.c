@@ -48,7 +48,8 @@
  * prototypes
  **************************************************************************/
 
-static bool btc_tx_write_2(utl_buf_t *pBuf, const btc_tx_t *pTx, bool enableSegWit);
+static uint32_t tx_read(btc_tx_t *pTx, const uint8_t *pData, uint32_t Len);
+static bool tx_write(utl_buf_t *pBuf, const btc_tx_t *pTx, bool enableSegWit);
 #ifdef USE_ELEMENTS
 static bool read_elements_vout_value(btc_buf_r_t *pTxBuf, uint8_t *pVersion, uint64_t *pValue, uint8_t *pCommitValue);
 #endif
@@ -405,10 +406,480 @@ bool btc_tx_set_vin_p2sh_multisig(btc_tx_t *pTx, uint32_t Index, const utl_buf_t
 
 bool btc_tx_read(btc_tx_t *pTx, const uint8_t *pData, uint32_t Len)
 {
+    uint32_t len = tx_read(pTx, pData, Len);
+    return len <= Len;
+}
+
+
+uint32_t btc_tx_read_with_len(btc_tx_t *pTx, const uint8_t *pData, uint32_t Len)
+{
+    return tx_read(pTx, pData, Len);
+}
+
+
+bool btc_tx_write(const btc_tx_t *pTx, utl_buf_t *pBuf)
+{
+    return tx_write(pBuf, pTx, true);
+}
+
+
+bool btc_tx_sighash(btc_tx_t *pTx, uint8_t *pTxHash, const utl_buf_t *pScriptPks[], uint32_t Num)
+{
+    bool ret = false;
+    const uint32_t sigtype = (uint32_t)SIGHASH_ALL;
+    utl_buf_t buf = UTL_BUF_INIT;
+
+    btc_tx_valid_t txvld = btc_tx_is_valid(pTx);
+    if (txvld != BTC_TXVALID_OK) {
+        LOGE("fail: invalid tx\n");
+        return false;
+    }
+
+    if (pTx->vin_cnt != Num) {
+        LOGE("fail: invalid vin_cnt\n");
+        return false;
+    }
+
+    //scriptSig -> tmp
+    utl_buf_t *tmp_vinbuf = (utl_buf_t *)UTL_DBG_MALLOC(sizeof(utl_buf_t) * pTx->vin_cnt);
+    for (uint32_t lp = 0; lp < pTx->vin_cnt; lp++) {
+        btc_vin_t *vin = &pTx->vin[lp];
+
+        tmp_vinbuf[lp].buf = vin->script.buf;
+        tmp_vinbuf[lp].len = vin->script.len;
+    }
+
+    //scriptPubKey -> scriptSig
+    for (uint32_t lp = 0; lp < pTx->vin_cnt; lp++) {
+        btc_vin_t *vin = &pTx->vin[lp];
+
+        vin->script.buf = (uint8_t *)UTL_DBG_MALLOC(pScriptPks[lp]->len);
+        if (!vin->script.buf) goto LABEL_EXIT;
+        vin->script.len = pScriptPks[lp]->len;
+        memcpy(vin->script.buf, pScriptPks[lp]->buf, pScriptPks[lp]->len);
+    }
+
+    //calc hash
+    if (!btc_tx_write(pTx, &buf)) {
+        assert(0);
+        goto LABEL_EXIT;
+    }
+    if (!utl_buf_realloc(&buf, buf.len + sizeof(sigtype))) {
+        utl_buf_free(&buf);
+        goto LABEL_EXIT;
+    }
+    memcpy(buf.buf + buf.len - sizeof(sigtype), &sigtype, sizeof(sigtype));
+    btc_md_hash256(pTxHash, buf.buf, buf.len);
+    utl_buf_free(&buf);
+
+    //tmp -> scriptSig
+    for (uint32_t lp = 0; lp < pTx->vin_cnt; lp++) {
+        btc_vin_t *vin = &pTx->vin[lp];
+
+        utl_buf_free(&vin->script);
+        vin->script.buf = tmp_vinbuf[lp].buf;
+        vin->script.len = tmp_vinbuf[lp].len;
+    }
+    UTL_DBG_FREE(tmp_vinbuf);
+
+    ret = true;
+
+LABEL_EXIT:
+    return ret;
+}
+
+
+bool btc_tx_sign_p2pkh(btc_tx_t *pTx, uint32_t Index, const uint8_t *pTxHash, const uint8_t *pPrivKey, const uint8_t *pPubKey)
+{
+    uint8_t pubkey[BTC_SZ_PUBKEY];
+    if (pPubKey == NULL) {
+        if (!btc_keys_priv2pub(pubkey, pPrivKey)) {
+            assert(0);
+            return false;
+        }
+        pPubKey = pubkey;
+    }
+    return btc_script_p2pkh_sign_scriptsig(&(pTx->vin[Index].script), pTxHash, pPrivKey, pPubKey);
+}
+
+
+bool btc_tx_verify_p2pkh(const btc_tx_t *pTx, uint32_t Index, const uint8_t *pTxHash, const uint8_t *pPubKeyHash)
+{
+    return btc_script_p2pkh_verify_scriptsig(&(pTx->vin[Index].script), pTxHash, pPubKeyHash);
+}
+
+
+bool btc_tx_verify_p2pkh_spk(const btc_tx_t *pTx, uint32_t Index, const uint8_t *pTxHash, const utl_buf_t *pScriptPk)
+{
+    return btc_script_p2pkh_verify_scriptsig_spk(&(pTx->vin[Index].script), pTxHash, pScriptPk);
+}
+
+
+bool btc_tx_verify_p2pkh_addr(const btc_tx_t *pTx, uint32_t Index, const uint8_t *pTxHash, const char *pAddr)
+{
+    uint8_t hash[BTC_SZ_HASH_MAX];
+    int pref;
+    if (!btc_keys_addr2hash(hash, &pref, pAddr)) return false;
+    if (pref != BTC_PREF_P2PKH) return false;
+    return btc_script_p2pkh_verify_scriptsig(&pTx->vin[Index].script, pTxHash, hash);
+}
+
+
+bool btc_tx_verify_p2sh_multisig(const btc_tx_t *pTx, uint32_t Index, const uint8_t *pTxHash, const uint8_t *pScriptHash)
+{
+    return btc_script_p2sh_multisig_verify_scriptsig(&(pTx->vin[Index].script), pTxHash, pScriptHash);
+}
+
+
+bool btc_tx_verify_p2sh_multisig_spk(const btc_tx_t *pTx, uint32_t Index, const uint8_t *pTxHash, const utl_buf_t *pScriptPk)
+{
+    return btc_script_p2sh_multisig_verify_scriptsig_spk(&(pTx->vin[Index].script), pTxHash, pScriptPk);
+}
+
+
+bool btc_tx_verify_p2sh_multisig_addr(const btc_tx_t *pTx, uint32_t Index, const uint8_t *pTxHash, const char *pAddr)
+{
+    uint8_t hash[BTC_SZ_HASH_MAX];
+    int pref;
+    if (!btc_keys_addr2hash(hash, &pref, pAddr)) return false;
+    if (pref != BTC_PREF_P2SH) return false;
+    return btc_script_p2sh_multisig_verify_scriptsig(&pTx->vin[Index].script, pTxHash, hash);
+}
+
+
+bool btc_tx_txid(const btc_tx_t *pTx, uint8_t *pTxId)
+{
+    utl_buf_t txbuf = UTL_BUF_INIT;
+
+    bool ret = tx_write(&txbuf, pTx, false);
+    if (!ret) {
+        assert(0);
+        goto LABEL_EXIT;
+    }
+    btc_md_hash256(pTxId, txbuf.buf, txbuf.len);
+    utl_buf_free(&txbuf);
+
+LABEL_EXIT:
+    return ret;
+}
+
+
+bool btc_tx_txid_raw(uint8_t *pTxId, const utl_buf_t *pTxRaw)
+{
+    btc_md_hash256(pTxId, pTxRaw->buf, pTxRaw->len);
+    return true;
+}
+
+
+// uint32_t btc_tx_get_vbyte(const btc_tx_t *pTx)
+// {
+//     //segwit判定
+//     bool segwit = false;
+//     for (uint32_t lp = 0; lp < pTx->vin_cnt; lp++) {
+//         btc_vin_t *vin = &(pTx->vin[lp]);
+//         if (vin->wit_item_cnt) {
+//             segwit = true;
+//         }
+//     }
+//     return 0;
+// }
+
+
+uint32_t btc_tx_get_vbyte_raw(const uint8_t *pData, uint32_t Len)
+{
+    //(旧format*3 + 新format) / 4を切り上げ
+    uint32_t weight = btc_tx_get_weight_raw(pData, Len);
+    uint32_t vsize = (weight + 3) / 4;
+    LOGD("vsize=%" PRIu32 "\n", vsize);
+    return vsize;
+}
+
+
+uint32_t btc_tx_get_weight_raw(const uint8_t *pData, uint32_t Len)
+{
+    //segwit判定
+    bool segwit;
+#if defined(USE_BITCOIN)
+    uint8_t mark = pData[4];
+    uint8_t flag = pData[5];
+    if ((mark == 0x00) && (flag != 0x01)) {
+        //2017/01/04:BIP-144ではflag==0x01のみ
+        return 0;
+    }
+    segwit = ((mark == 0x00) && (flag == 0x01));
+#elif defined(USE_ELEMENTS)
+    segwit = pData[4] & 0x01;
+#endif
+
+    //https://bitcoincore.org/ja/segwit_wallet_dev/#transaction-fee-estimation
+    uint32_t len;
+    if (segwit) {
+        //旧format*3 + 新format
+        //  旧: nVersion            |txins|txouts        |nLockTime
+        //  新: nVersion|marker|flag|txins|txouts|witness|nLockTime
+        btc_tx_t txold = BTC_TX_INIT;
+        utl_buf_t txbuf_old = UTL_BUF_INIT;
+
+        if (!btc_tx_read(&txold, pData, Len)) {
+            LOGE("fail: vbyte\n");
+            len = 0;
+            goto LABEL_EXIT;
+        }
+
+        if (!tx_write(&txbuf_old, &txold, false)) {
+            LOGE("fail: vbyte\n");
+            len = 0;
+            goto LABEL_EXIT;
+        }
+
+        uint32_t fmt_old = txbuf_old.len;
+        uint32_t fmt_new = Len;
+        len = fmt_old * 3 + fmt_new;
+    } else {
+        len = Len * 4;
+    }
+
+LABEL_EXIT:
+    LOGD("weight=%" PRIu32 "\n", len);
+    return len;
+}
+
+
+void btc_tx_sort_bip69(btc_tx_t *pTx)
+{
+    //sort vin
+    //  key1: txid
+    //  key2: index
+    if (pTx->vin_cnt > 1) {
+        for (uint32_t lp = 0; lp < pTx->vin_cnt - 1; lp++) {
+            for (uint32_t lp2 = lp + 1; lp2 < pTx->vin_cnt; lp2++) {
+                btc_vin_t *p_vin1 = &pTx->vin[lp];
+                btc_vin_t *p_vin2 = &pTx->vin[lp2];
+                uint8_t txid1[BTC_SZ_TXID];
+                uint8_t txid2[BTC_SZ_TXID];
+                utl_mem_reverse_byte(txid1, p_vin1->txid, BTC_SZ_TXID);
+                utl_mem_reverse_byte(txid2, p_vin2->txid, BTC_SZ_TXID);
+                int cmp = memcmp(txid1, txid2, BTC_SZ_TXID);
+                if (cmp < 0) continue;
+                if (cmp == 0) {
+                    if (p_vin1->index < p_vin2->index) continue;
+                }
+                btc_vin_t tmp;
+                utl_mem_swap(p_vin1, p_vin2, &tmp, sizeof(btc_vin_t));
+            }
+        }
+    }
+
+    //sort vout
+    //  key1: amount (numerical order)
+    //  key2: scriptPubKey
+    if (pTx->vout_cnt > 1) {
+        for (uint32_t lp = 0; lp < pTx->vout_cnt - 1; lp++) {
+            for (uint32_t lp2 = lp + 1; lp2 < pTx->vout_cnt; lp2++) {
+                btc_vout_t *p_vout1 = &pTx->vout[lp];
+                btc_vout_t *p_vout2 = &pTx->vout[lp2];
+#ifdef USE_ELEMENTS
+                if (p_vout1->script.len == 0) {
+                    // fee vout place last
+                    btc_vout_t tmp;
+                    utl_mem_swap(p_vout1, p_vout2, &tmp, sizeof(btc_vout_t));
+                }
+#endif
+                if (p_vout1->value < p_vout2->value) continue;
+                if (p_vout1->value == p_vout2->value) {
+                    uint16_t min_len = (p_vout1->script.len < p_vout2->script.len) ?
+                        p_vout1->script.len : p_vout2->script.len;
+                    int cmp = memcmp(p_vout1->script.buf, p_vout2->script.buf, min_len);
+                    if (cmp <= 0) continue;
+                }
+                btc_vout_t tmp;
+                utl_mem_swap(p_vout1, p_vout2, &tmp, sizeof(btc_vout_t));
+            }
+        }
+    }
+}
+
+
+#if defined(PTARM_USE_PRINTFUNC) && !defined(PTARM_UTL_LOG_MACRO_DISABLED)
+void btc_tx_print(const btc_tx_t *pTx)
+{
+    LOGD2("======================================\n");
+    uint8_t txid[BTC_SZ_TXID];
+    btc_tx_txid(pTx, txid);
+    LOGD2("txid= ");
+    TXIDD(txid);
+    LOGD2("======================================\n");
+    LOGD2(" version:%d\n", pTx->version);
+    LOGD2("\n");
+    LOGD2(" txin_cnt= %u\n", pTx->vin_cnt);
+    for (uint32_t lp = 0; lp < pTx->vin_cnt; lp++) {
+        LOGD2(" [vin #%u]\n", lp);
+        LOGD2("  txid= ");
+        TXIDD(pTx->vin[lp].txid);
+        LOGD2("       LE: ");
+        DUMPD(pTx->vin[lp].txid, BTC_SZ_TXID);
+        LOGD2("  index= %u\n", pTx->vin[lp].index);
+#ifdef USE_ELEMENTS
+        LOGD2("    issuance= %d\n", pTx->vin[lp].issuance);
+        LOGD2("    pegin= %d\n", pTx->vin[lp].pegin);
+#endif
+        LOGD2("  scriptSig[%u]= ", pTx->vin[lp].script.len);
+        DUMPD(pTx->vin[lp].script.buf, pTx->vin[lp].script.len);
+        //btc_script_print(pTx->vin[lp].script.buf, pTx->vin[lp].script.len);
+        ////p2sh-p2wsh
+        //bool p2wsh = (pTx->vin[lp].script.len == 35) && //redeemScript
+        //             (pTx->vin[lp].script.buf[1] == 0x00) && //witness program
+        //             (pTx->vin[lp].script.buf[2] == 0x20);
+        //bool p2wsh = (pTx->vin[lp].wit_item_cnt >= 3);
+        LOGD2("  sequence= 0x%08x\n", pTx->vin[lp].sequence);
+        for (uint32_t lp2 = 0; lp2 < pTx->vin[lp].wit_item_cnt; lp2++) {
+            LOGD2("    wit[%u][%u]= ", lp2, pTx->vin[lp].witness[lp2].len);
+            if (pTx->vin[lp].witness[lp2].len) {
+                DUMPD(pTx->vin[lp].witness[lp2].buf, pTx->vin[lp].witness[lp2].len);
+                // if (p2wsh &&(lp2 == pTx->vin[lp].wit_item_cnt - 1)) {
+                //     //P2WSHの最後はwitnessScript
+                //     //Native P2WSHでも表示させたかったが、識別する方法が思いつかない
+                //     btc_script_print(pTx->vin[lp].witness[lp2].buf, pTx->vin[lp].witness[lp2].len);
+                // }
+            } else {
+                LOGD2("<none>\n");
+            }
+        }
+        LOGD2("\n");
+    }
+    LOGD2(" txout_cnt= %u\n", pTx->vout_cnt);
+    for (uint32_t lp = 0; lp < pTx->vout_cnt; lp++) {
+        LOGD2(" [vout #%u]\n", lp);
+#if defined(USE_BITCOIN)
+        LOGD2("  value= %llu (%-.8lf " BTC_UNIT ")\n", (unsigned long long)pTx->vout[lp].value, BTC_SATOSHI2BTC(pTx->vout[lp].value));
+        //DUMPD(((const uint8_t *)&pTx->vout[lp].value), sizeof(pTx->vout[lp].value));
+        //LOGD2("    %10.5f m" BTC_UNIT ", %10.8f " BTC_UNIT "\n", BTC_SATOSHI2MBTC(pTx->vout[lp].value), BTC_SATOSHI2BTC(pTx->vout[lp].value));
+#elif defined(USE_ELEMENTS)
+        const char *p_type_str;
+        switch (pTx->vout[lp].type) {
+        case BTC_TX_ELE_VOUT_ADDR:
+            p_type_str = "address";
+            break;
+        case BTC_TX_ELE_VOUT_DATA:
+            p_type_str = "data";
+            break;
+        case BTC_TX_ELE_VOUT_BURN:
+            p_type_str = "burn";
+            break;
+        case BTC_TX_ELE_VOUT_FEE:
+            p_type_str = "fee";
+            break;
+        default:
+            p_type_str = "unknown";
+        }
+        LOGD2("  type=%s\n", p_type_str);
+        LOGD2("  asset(version=0x%02x)=", pTx->vout[lp].ver_asset);
+        switch (pTx->vout[lp].ver_asset) {
+        case BTC_TX_ELE_VOUT_VER_NULL:
+            LOGD2("<NULL>\n");
+            break;
+        case BTC_TX_ELE_VOUT_VER_EXPLICIT:
+            DUMPD(pTx->vout[lp].asset, BTC_SZ_HASH256);
+            break;
+        case BTC_TX_ELE_VOUT_VER_ASSET_PFA:
+            LOGD2("<confidential:prefixA>\n");
+            break;
+        case BTC_TX_ELE_VOUT_VER_ASSET_PFB:
+            LOGD2("<confidential:prefixB>\n");
+            break;
+        default:
+            LOGD2("<confidential:unknown>\n");
+        }
+
+        LOGD2("  value(version=0x%02x)=", pTx->vout[lp].ver_value);
+        switch (pTx->vout[lp].ver_value) {
+        case BTC_TX_ELE_VOUT_VER_NULL:
+            LOGD2("<NULL>\n");
+            break;
+        case BTC_TX_ELE_VOUT_VER_EXPLICIT:
+            LOGD2("%llu (%-.8lf " BTC_UNIT ")\n",
+                    (unsigned long long)pTx->vout[lp].value,
+                    BTC_SATOSHI2BTC(pTx->vout[lp].value));
+            break;
+        case BTC_TX_ELE_VOUT_VER_VALUE_PFA:
+            LOGD2("<confidential:prefixA>\n");
+            break;
+        case BTC_TX_ELE_VOUT_VER_VALUE_PFB:
+            LOGD2("<confidential:prefixB>\n");
+            break;
+        default:
+            LOGD2("<confidential:unknown>\n");
+        }
+
+        LOGD2("  nonce(version=0x%02x)=", pTx->vout[lp].ver_nonce);
+        switch (pTx->vout[lp].ver_nonce) {
+        case BTC_TX_ELE_VOUT_VER_NULL:
+            LOGD2("<NULL>\n");
+            break;
+        case BTC_TX_ELE_VOUT_VER_EXPLICIT:
+            LOGD2("...\n");
+            break;
+        case BTC_TX_ELE_VOUT_VER_NONCE_PFA:
+            LOGD2("<confidential:prefixA>\n");
+            break;
+        case BTC_TX_ELE_VOUT_VER_NONCE_PFB:
+            LOGD2("<confidential:prefixB>\n");
+            break;
+        default:
+            LOGD2("<confidential:unknown>\n");
+        }
+#endif
+        utl_buf_t *buf = &(pTx->vout[lp].script);
+        LOGD2("  scriptPubKey[%u]= ", buf->len);
+        DUMPD(buf->buf, buf->len);
+        //btc_script_print(buf->buf, buf->len);
+#if defined(USE_BITCOIN)
+        char addr[BTC_SZ_ADDR_STR_MAX + 1];
+        if (btc_keys_spk2addr(addr, buf)) {
+            LOGD2("    (%s)\n", addr);
+        }
+#endif
+        LOGD2("\n");
+    }
+    LOGD2(" locktime= 0x%08x : ", pTx->locktime);
+    if (pTx->locktime < BTC_TX_LOCKTIME_LIMIT) {
+        //ブロック高
+        LOGD2("block height\n");
+    } else {
+        //epoch second
+        char time[UTL_SZ_TIME_FMT_STR + 1];
+        LOGD2("epoch second: %s\n", utl_time_fmt(time, pTx->locktime));
+    }
+    LOGD2("======================================\n");
+}
+
+
+void btc_tx_print_raw(const uint8_t *pData, uint32_t Len)
+{
+    btc_tx_t tx;
+    bool ret = btc_tx_read(&tx, pData, Len);
+    if (!ret) {
+        return;
+    }
+
+    btc_tx_print(&tx);
+
+    btc_tx_free(&tx);
+}
+#endif  //PTARM_USE_PRINTFUNC
+
+
+/**************************************************************************
+ * package functions
+ **************************************************************************/
+
+static uint32_t tx_read(btc_tx_t *pTx, const uint8_t *pData, uint32_t Len)
+{
     //XXX: check error
     // segwit but non-witness is not permitted
 
     bool ret = false;
+    uint32_t ret_len = 0;
     uint32_t tmp_u32;
     uint64_t tmp_u64;
     uint32_t i;
@@ -873,12 +1344,7 @@ bool btc_tx_read(btc_tx_t *pTx, const uint8_t *pData, uint32_t Len)
     #error neither BITCOIN nor ELEMENTS
 #endif
 
-    //check the end of the data
-    if (btc_tx_buf_r_remains(&txbuf)) {
-        LOGE("fail\n");
-        goto LABEL_EXIT;
-    }
-
+    ret_len = txbuf._pos;
     ret = true;
 
 LABEL_EXIT:
@@ -886,465 +1352,9 @@ LABEL_EXIT:
         LOGE("fail: read_tx\n");
         btc_tx_free(pTx);
     }
-    return ret;
+    return ret_len;
 }
 
-
-bool btc_tx_write(const btc_tx_t *pTx, utl_buf_t *pBuf)
-{
-    return btc_tx_write_2(pBuf, pTx, true);
-}
-
-
-bool btc_tx_sighash(btc_tx_t *pTx, uint8_t *pTxHash, const utl_buf_t *pScriptPks[], uint32_t Num)
-{
-    bool ret = false;
-    const uint32_t sigtype = (uint32_t)SIGHASH_ALL;
-    utl_buf_t buf = UTL_BUF_INIT;
-
-    btc_tx_valid_t txvld = btc_tx_is_valid(pTx);
-    if (txvld != BTC_TXVALID_OK) {
-        LOGE("fail: invalid tx\n");
-        return false;
-    }
-
-    if (pTx->vin_cnt != Num) {
-        LOGE("fail: invalid vin_cnt\n");
-        return false;
-    }
-
-    //scriptSig -> tmp
-    utl_buf_t *tmp_vinbuf = (utl_buf_t *)UTL_DBG_MALLOC(sizeof(utl_buf_t) * pTx->vin_cnt);
-    for (uint32_t lp = 0; lp < pTx->vin_cnt; lp++) {
-        btc_vin_t *vin = &pTx->vin[lp];
-
-        tmp_vinbuf[lp].buf = vin->script.buf;
-        tmp_vinbuf[lp].len = vin->script.len;
-    }
-
-    //scriptPubKey -> scriptSig
-    for (uint32_t lp = 0; lp < pTx->vin_cnt; lp++) {
-        btc_vin_t *vin = &pTx->vin[lp];
-
-        vin->script.buf = (uint8_t *)UTL_DBG_MALLOC(pScriptPks[lp]->len);
-        if (!vin->script.buf) goto LABEL_EXIT;
-        vin->script.len = pScriptPks[lp]->len;
-        memcpy(vin->script.buf, pScriptPks[lp]->buf, pScriptPks[lp]->len);
-    }
-
-    //calc hash
-    if (!btc_tx_write(pTx, &buf)) {
-        assert(0);
-        goto LABEL_EXIT;
-    }
-    if (!utl_buf_realloc(&buf, buf.len + sizeof(sigtype))) {
-        utl_buf_free(&buf);
-        goto LABEL_EXIT;
-    }
-    memcpy(buf.buf + buf.len - sizeof(sigtype), &sigtype, sizeof(sigtype));
-    btc_md_hash256(pTxHash, buf.buf, buf.len);
-    utl_buf_free(&buf);
-
-    //tmp -> scriptSig
-    for (uint32_t lp = 0; lp < pTx->vin_cnt; lp++) {
-        btc_vin_t *vin = &pTx->vin[lp];
-
-        utl_buf_free(&vin->script);
-        vin->script.buf = tmp_vinbuf[lp].buf;
-        vin->script.len = tmp_vinbuf[lp].len;
-    }
-    UTL_DBG_FREE(tmp_vinbuf);
-
-    ret = true;
-
-LABEL_EXIT:
-    return ret;
-}
-
-
-bool btc_tx_sign_p2pkh(btc_tx_t *pTx, uint32_t Index, const uint8_t *pTxHash, const uint8_t *pPrivKey, const uint8_t *pPubKey)
-{
-    uint8_t pubkey[BTC_SZ_PUBKEY];
-    if (pPubKey == NULL) {
-        if (!btc_keys_priv2pub(pubkey, pPrivKey)) {
-            assert(0);
-            return false;
-        }
-        pPubKey = pubkey;
-    }
-    return btc_script_p2pkh_sign_scriptsig(&(pTx->vin[Index].script), pTxHash, pPrivKey, pPubKey);
-}
-
-
-bool btc_tx_verify_p2pkh(const btc_tx_t *pTx, uint32_t Index, const uint8_t *pTxHash, const uint8_t *pPubKeyHash)
-{
-    return btc_script_p2pkh_verify_scriptsig(&(pTx->vin[Index].script), pTxHash, pPubKeyHash);
-}
-
-
-bool btc_tx_verify_p2pkh_spk(const btc_tx_t *pTx, uint32_t Index, const uint8_t *pTxHash, const utl_buf_t *pScriptPk)
-{
-    return btc_script_p2pkh_verify_scriptsig_spk(&(pTx->vin[Index].script), pTxHash, pScriptPk);
-}
-
-
-bool btc_tx_verify_p2pkh_addr(const btc_tx_t *pTx, uint32_t Index, const uint8_t *pTxHash, const char *pAddr)
-{
-    uint8_t hash[BTC_SZ_HASH_MAX];
-    int pref;
-    if (!btc_keys_addr2hash(hash, &pref, pAddr)) return false;
-    if (pref != BTC_PREF_P2PKH) return false;
-    return btc_script_p2pkh_verify_scriptsig(&pTx->vin[Index].script, pTxHash, hash);
-}
-
-
-bool btc_tx_verify_p2sh_multisig(const btc_tx_t *pTx, uint32_t Index, const uint8_t *pTxHash, const uint8_t *pScriptHash)
-{
-    return btc_script_p2sh_multisig_verify_scriptsig(&(pTx->vin[Index].script), pTxHash, pScriptHash);
-}
-
-
-bool btc_tx_verify_p2sh_multisig_spk(const btc_tx_t *pTx, uint32_t Index, const uint8_t *pTxHash, const utl_buf_t *pScriptPk)
-{
-    return btc_script_p2sh_multisig_verify_scriptsig_spk(&(pTx->vin[Index].script), pTxHash, pScriptPk);
-}
-
-
-bool btc_tx_verify_p2sh_multisig_addr(const btc_tx_t *pTx, uint32_t Index, const uint8_t *pTxHash, const char *pAddr)
-{
-    uint8_t hash[BTC_SZ_HASH_MAX];
-    int pref;
-    if (!btc_keys_addr2hash(hash, &pref, pAddr)) return false;
-    if (pref != BTC_PREF_P2SH) return false;
-    return btc_script_p2sh_multisig_verify_scriptsig(&pTx->vin[Index].script, pTxHash, hash);
-}
-
-
-bool btc_tx_txid(const btc_tx_t *pTx, uint8_t *pTxId)
-{
-    utl_buf_t txbuf = UTL_BUF_INIT;
-
-    bool ret = btc_tx_write_2(&txbuf, pTx, false);
-    if (!ret) {
-        assert(0);
-        goto LABEL_EXIT;
-    }
-    btc_md_hash256(pTxId, txbuf.buf, txbuf.len);
-    utl_buf_free(&txbuf);
-
-LABEL_EXIT:
-    return ret;
-}
-
-
-bool btc_tx_txid_raw(uint8_t *pTxId, const utl_buf_t *pTxRaw)
-{
-    btc_md_hash256(pTxId, pTxRaw->buf, pTxRaw->len);
-    return true;
-}
-
-
-// uint32_t btc_tx_get_vbyte(const btc_tx_t *pTx)
-// {
-//     //segwit判定
-//     bool segwit = false;
-//     for (uint32_t lp = 0; lp < pTx->vin_cnt; lp++) {
-//         btc_vin_t *vin = &(pTx->vin[lp]);
-//         if (vin->wit_item_cnt) {
-//             segwit = true;
-//         }
-//     }
-//     return 0;
-// }
-
-
-uint32_t btc_tx_get_vbyte_raw(const uint8_t *pData, uint32_t Len)
-{
-    //(旧format*3 + 新format) / 4を切り上げ
-    uint32_t weight = btc_tx_get_weight_raw(pData, Len);
-    uint32_t vsize = (weight + 3) / 4;
-    LOGD("vsize=%" PRIu32 "\n", vsize);
-    return vsize;
-}
-
-
-uint32_t btc_tx_get_weight_raw(const uint8_t *pData, uint32_t Len)
-{
-    //segwit判定
-    bool segwit;
-#if defined(USE_BITCOIN)
-    uint8_t mark = pData[4];
-    uint8_t flag = pData[5];
-    if ((mark == 0x00) && (flag != 0x01)) {
-        //2017/01/04:BIP-144ではflag==0x01のみ
-        return 0;
-    }
-    segwit = ((mark == 0x00) && (flag == 0x01));
-#elif defined(USE_ELEMENTS)
-    segwit = pData[4] & 0x01;
-#endif
-
-    //https://bitcoincore.org/ja/segwit_wallet_dev/#transaction-fee-estimation
-    uint32_t len;
-    if (segwit) {
-        //旧format*3 + 新format
-        //  旧: nVersion            |txins|txouts        |nLockTime
-        //  新: nVersion|marker|flag|txins|txouts|witness|nLockTime
-        btc_tx_t txold = BTC_TX_INIT;
-        utl_buf_t txbuf_old = UTL_BUF_INIT;
-
-        if (!btc_tx_read(&txold, pData, Len)) {
-            LOGE("fail: vbyte\n");
-            len = 0;
-            goto LABEL_EXIT;
-        }
-
-        if (!btc_tx_write_2(&txbuf_old, &txold, false)) {
-            LOGE("fail: vbyte\n");
-            len = 0;
-            goto LABEL_EXIT;
-        }
-
-        uint32_t fmt_old = txbuf_old.len;
-        uint32_t fmt_new = Len;
-        len = fmt_old * 3 + fmt_new;
-    } else {
-        len = Len * 4;
-    }
-
-LABEL_EXIT:
-    LOGD("weight=%" PRIu32 "\n", len);
-    return len;
-}
-
-
-void btc_tx_sort_bip69(btc_tx_t *pTx)
-{
-    //sort vin
-    //  key1: txid
-    //  key2: index
-    if (pTx->vin_cnt > 1) {
-        for (uint32_t lp = 0; lp < pTx->vin_cnt - 1; lp++) {
-            for (uint32_t lp2 = lp + 1; lp2 < pTx->vin_cnt; lp2++) {
-                btc_vin_t *p_vin1 = &pTx->vin[lp];
-                btc_vin_t *p_vin2 = &pTx->vin[lp2];
-                uint8_t txid1[BTC_SZ_TXID];
-                uint8_t txid2[BTC_SZ_TXID];
-                utl_mem_reverse_byte(txid1, p_vin1->txid, BTC_SZ_TXID);
-                utl_mem_reverse_byte(txid2, p_vin2->txid, BTC_SZ_TXID);
-                int cmp = memcmp(txid1, txid2, BTC_SZ_TXID);
-                if (cmp < 0) continue;
-                if (cmp == 0) {
-                    if (p_vin1->index < p_vin2->index) continue;
-                }
-                btc_vin_t tmp;
-                utl_mem_swap(p_vin1, p_vin2, &tmp, sizeof(btc_vin_t));
-            }
-        }
-    }
-
-    //sort vout
-    //  key1: amount (numerical order)
-    //  key2: scriptPubKey
-    if (pTx->vout_cnt > 1) {
-        for (uint32_t lp = 0; lp < pTx->vout_cnt - 1; lp++) {
-            for (uint32_t lp2 = lp + 1; lp2 < pTx->vout_cnt; lp2++) {
-                btc_vout_t *p_vout1 = &pTx->vout[lp];
-                btc_vout_t *p_vout2 = &pTx->vout[lp2];
-#ifdef USE_ELEMENTS
-                if (p_vout1->script.len == 0) {
-                    // fee vout place last
-                    btc_vout_t tmp;
-                    utl_mem_swap(p_vout1, p_vout2, &tmp, sizeof(btc_vout_t));
-                }
-#endif
-                if (p_vout1->value < p_vout2->value) continue;
-                if (p_vout1->value == p_vout2->value) {
-                    uint16_t min_len = (p_vout1->script.len < p_vout2->script.len) ?
-                        p_vout1->script.len : p_vout2->script.len;
-                    int cmp = memcmp(p_vout1->script.buf, p_vout2->script.buf, min_len);
-                    if (cmp <= 0) continue;
-                }
-                btc_vout_t tmp;
-                utl_mem_swap(p_vout1, p_vout2, &tmp, sizeof(btc_vout_t));
-            }
-        }
-    }
-}
-
-
-#if defined(PTARM_USE_PRINTFUNC) && !defined(PTARM_UTL_LOG_MACRO_DISABLED)
-void btc_tx_print(const btc_tx_t *pTx)
-{
-    LOGD2("======================================\n");
-    uint8_t txid[BTC_SZ_TXID];
-    btc_tx_txid(pTx, txid);
-    LOGD2("txid= ");
-    TXIDD(txid);
-    LOGD2("======================================\n");
-    LOGD2(" version:%d\n", pTx->version);
-    LOGD2("\n");
-    LOGD2(" txin_cnt= %u\n", pTx->vin_cnt);
-    for (uint32_t lp = 0; lp < pTx->vin_cnt; lp++) {
-        LOGD2(" [vin #%u]\n", lp);
-        LOGD2("  txid= ");
-        TXIDD(pTx->vin[lp].txid);
-        LOGD2("       LE: ");
-        DUMPD(pTx->vin[lp].txid, BTC_SZ_TXID);
-        LOGD2("  index= %u\n", pTx->vin[lp].index);
-#ifdef USE_ELEMENTS
-        LOGD2("    issuance= %d\n", pTx->vin[lp].issuance);
-        LOGD2("    pegin= %d\n", pTx->vin[lp].pegin);
-#endif
-        LOGD2("  scriptSig[%u]= ", pTx->vin[lp].script.len);
-        DUMPD(pTx->vin[lp].script.buf, pTx->vin[lp].script.len);
-        //btc_script_print(pTx->vin[lp].script.buf, pTx->vin[lp].script.len);
-        ////p2sh-p2wsh
-        //bool p2wsh = (pTx->vin[lp].script.len == 35) && //redeemScript
-        //             (pTx->vin[lp].script.buf[1] == 0x00) && //witness program
-        //             (pTx->vin[lp].script.buf[2] == 0x20);
-        //bool p2wsh = (pTx->vin[lp].wit_item_cnt >= 3);
-        LOGD2("  sequence= 0x%08x\n", pTx->vin[lp].sequence);
-        for (uint32_t lp2 = 0; lp2 < pTx->vin[lp].wit_item_cnt; lp2++) {
-            LOGD2("    wit[%u][%u]= ", lp2, pTx->vin[lp].witness[lp2].len);
-            if (pTx->vin[lp].witness[lp2].len) {
-                DUMPD(pTx->vin[lp].witness[lp2].buf, pTx->vin[lp].witness[lp2].len);
-                // if (p2wsh &&(lp2 == pTx->vin[lp].wit_item_cnt - 1)) {
-                //     //P2WSHの最後はwitnessScript
-                //     //Native P2WSHでも表示させたかったが、識別する方法が思いつかない
-                //     btc_script_print(pTx->vin[lp].witness[lp2].buf, pTx->vin[lp].witness[lp2].len);
-                // }
-            } else {
-                LOGD2("<none>\n");
-            }
-        }
-        LOGD2("\n");
-    }
-    LOGD2(" txout_cnt= %u\n", pTx->vout_cnt);
-    for (uint32_t lp = 0; lp < pTx->vout_cnt; lp++) {
-        LOGD2(" [vout #%u]\n", lp);
-#if defined(USE_BITCOIN)
-        LOGD2("  value= %llu (%-.8lf " BTC_UNIT ")\n", (unsigned long long)pTx->vout[lp].value, BTC_SATOSHI2BTC(pTx->vout[lp].value));
-        //DUMPD(((const uint8_t *)&pTx->vout[lp].value), sizeof(pTx->vout[lp].value));
-        //LOGD2("    %10.5f m" BTC_UNIT ", %10.8f " BTC_UNIT "\n", BTC_SATOSHI2MBTC(pTx->vout[lp].value), BTC_SATOSHI2BTC(pTx->vout[lp].value));
-#elif defined(USE_ELEMENTS)
-        const char *p_type_str;
-        switch (pTx->vout[lp].type) {
-        case BTC_TX_ELE_VOUT_ADDR:
-            p_type_str = "address";
-            break;
-        case BTC_TX_ELE_VOUT_DATA:
-            p_type_str = "data";
-            break;
-        case BTC_TX_ELE_VOUT_BURN:
-            p_type_str = "burn";
-            break;
-        case BTC_TX_ELE_VOUT_FEE:
-            p_type_str = "fee";
-            break;
-        default:
-            p_type_str = "unknown";
-        }
-        LOGD2("  type=%s\n", p_type_str);
-        LOGD2("  asset(version=0x%02x)=", pTx->vout[lp].ver_asset);
-        switch (pTx->vout[lp].ver_asset) {
-        case BTC_TX_ELE_VOUT_VER_NULL:
-            LOGD2("<NULL>\n");
-            break;
-        case BTC_TX_ELE_VOUT_VER_EXPLICIT:
-            DUMPD(pTx->vout[lp].asset, BTC_SZ_HASH256);
-            break;
-        case BTC_TX_ELE_VOUT_VER_ASSET_PFA:
-            LOGD2("<confidential:prefixA>\n");
-            break;
-        case BTC_TX_ELE_VOUT_VER_ASSET_PFB:
-            LOGD2("<confidential:prefixB>\n");
-            break;
-        default:
-            LOGD2("<confidential:unknown>\n");
-        }
-
-        LOGD2("  value(version=0x%02x)=", pTx->vout[lp].ver_value);
-        switch (pTx->vout[lp].ver_value) {
-        case BTC_TX_ELE_VOUT_VER_NULL:
-            LOGD2("<NULL>\n");
-            break;
-        case BTC_TX_ELE_VOUT_VER_EXPLICIT:
-            LOGD2("%llu (%-.8lf " BTC_UNIT ")\n",
-                    (unsigned long long)pTx->vout[lp].value,
-                    BTC_SATOSHI2BTC(pTx->vout[lp].value));
-            break;
-        case BTC_TX_ELE_VOUT_VER_VALUE_PFA:
-            LOGD2("<confidential:prefixA>\n");
-            break;
-        case BTC_TX_ELE_VOUT_VER_VALUE_PFB:
-            LOGD2("<confidential:prefixB>\n");
-            break;
-        default:
-            LOGD2("<confidential:unknown>\n");
-        }
-
-        LOGD2("  nonce(version=0x%02x)=", pTx->vout[lp].ver_nonce);
-        switch (pTx->vout[lp].ver_nonce) {
-        case BTC_TX_ELE_VOUT_VER_NULL:
-            LOGD2("<NULL>\n");
-            break;
-        case BTC_TX_ELE_VOUT_VER_EXPLICIT:
-            LOGD2("...\n");
-            break;
-        case BTC_TX_ELE_VOUT_VER_NONCE_PFA:
-            LOGD2("<confidential:prefixA>\n");
-            break;
-        case BTC_TX_ELE_VOUT_VER_NONCE_PFB:
-            LOGD2("<confidential:prefixB>\n");
-            break;
-        default:
-            LOGD2("<confidential:unknown>\n");
-        }
-#endif
-        utl_buf_t *buf = &(pTx->vout[lp].script);
-        LOGD2("  scriptPubKey[%u]= ", buf->len);
-        DUMPD(buf->buf, buf->len);
-        //btc_script_print(buf->buf, buf->len);
-#if defined(USE_BITCOIN)
-        char addr[BTC_SZ_ADDR_STR_MAX + 1];
-        if (btc_keys_spk2addr(addr, buf)) {
-            LOGD2("    (%s)\n", addr);
-        }
-#endif
-        LOGD2("\n");
-    }
-    LOGD2(" locktime= 0x%08x : ", pTx->locktime);
-    if (pTx->locktime < BTC_TX_LOCKTIME_LIMIT) {
-        //ブロック高
-        LOGD2("block height\n");
-    } else {
-        //epoch second
-        char time[UTL_SZ_TIME_FMT_STR + 1];
-        LOGD2("epoch second: %s\n", utl_time_fmt(time, pTx->locktime));
-    }
-    LOGD2("======================================\n");
-}
-
-
-void btc_tx_print_raw(const uint8_t *pData, uint32_t Len)
-{
-    btc_tx_t tx;
-    bool ret = btc_tx_read(&tx, pData, Len);
-    if (!ret) {
-        return;
-    }
-
-    btc_tx_print(&tx);
-
-    btc_tx_free(&tx);
-}
-#endif  //PTARM_USE_PRINTFUNC
-
-
-/**************************************************************************
- * package functions
- **************************************************************************/
 
 /** トランザクションデータ作成
  *
@@ -1356,7 +1366,7 @@ void btc_tx_print_raw(const uint8_t *pData, uint32_t Len)
  *      - 動的にメモリ確保するため、pBufは使用後 #utl_buf_free()で解放すること
  *      - vin cntおよびvout cntは 252までしか対応しない(varint型の1byteまで)
  */
-static bool btc_tx_write_2(utl_buf_t *pBuf, const btc_tx_t *pTx, bool enableSegWit)
+static bool tx_write(utl_buf_t *pBuf, const btc_tx_t *pTx, bool enableSegWit)
 {
     bool ret = false;
 

@@ -371,6 +371,9 @@ bool btc_tx_set_vin_p2sh_multisig(btc_tx_t *pTx, uint32_t Index, const utl_buf_t
 bool btc_tx_read(btc_tx_t *pTx, const uint8_t *pData, uint32_t Len);
 
 
+uint32_t btc_tx_read_with_len(btc_tx_t *pTx, const uint8_t *pData, uint32_t Len);
+
+
 /** convert tx from #btc_tx_t to data array
  *
  * @param[in]       pTx         対象データ
